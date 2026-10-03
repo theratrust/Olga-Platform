@@ -3,6 +3,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from services.knowledge import (
     get_recent_knowledge_proposals,
+    get_knowledge_proposal,
     update_knowledge_proposal_status,
     create_method_draft,
 )
@@ -30,7 +31,7 @@ def register_knowledge_view(
 
         if not proposals:
             await message.answer(
-                "📚 Пока в твоём методе нет сохранённых материалов."
+                "📚 Пока нет сохранённых материалов для метода."
             )
             return
 
@@ -53,7 +54,7 @@ def register_knowledge_view(
                     inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text="✅ Сохранить в метод",
+                                text="🧩 Подтвердить и создать AI-черновик",
                                 callback_data=f"knowledge_approve_{proposal_id}",
                             )
                         ],
@@ -76,7 +77,6 @@ def register_knowledge_view(
                 reply_markup=kb,
             )
 
-
     @dp.callback_query(
         F.data.startswith("knowledge_approve_")
     )
@@ -95,24 +95,60 @@ def register_knowledge_view(
             callback.data.split("_")[-1]
         )
 
+        proposal = await get_knowledge_proposal(
+            proposal_id
+        )
+
+        if not proposal:
+            await callback.answer(
+                "Исходный материал не найден.",
+                show_alert=True,
+            )
+            return
+
+        (
+            stored_id,
+            source_type,
+            source_name,
+            category,
+            title,
+            content,
+            status,
+        ) = proposal
+
+        if status != "PENDING":
+            await callback.answer(
+                f"Материал уже обработан: {status}",
+                show_alert=True,
+            )
+            return
+
         ai_result = await enrich_method_observation(
             ai_client,
             model_name,
-            callback.message.text,
+            content,
         )
 
         parsed = parse_method_ai_response(
             ai_result
         )
 
+        questions = parsed["questions"]
+
+        if isinstance(questions, list):
+            suggested_questions = "\n".join(
+                str(question)
+                for question in questions
+            )
+        else:
+            suggested_questions = str(questions or "")
+
         await create_method_draft(
             proposal_id=proposal_id,
             suggested_type=parsed["type"],
             suggested_title=parsed["title"],
             suggested_content=parsed["principle"],
-            suggested_questions="\n".join(
-                parsed["questions"]
-            ),
+            suggested_questions=suggested_questions,
         )
 
         await update_knowledge_proposal_status(
@@ -126,11 +162,20 @@ def register_knowledge_view(
                 "Статус: PENDING",
                 "Статус: APPROVED"
             )
-            + "\n\n✅ Добавлено в твой метод."
+            + (
+                "\n\n✅ Исходный материал подтверждён."
+                "\n"
+                "AI создал черновик структуры метода."
+                "\n"
+                "Он ещё не является частью метода."
+                "\n"
+                "Проверь его через /метод_черновики."
+            )
         )
 
-        await callback.answer()
-
+        await callback.answer(
+            "AI-черновик создан."
+        )
 
     @dp.callback_query(
         F.data.startswith("knowledge_reject_")
@@ -149,6 +194,24 @@ def register_knowledge_view(
         proposal_id = int(
             callback.data.split("_")[-1]
         )
+
+        proposal = await get_knowledge_proposal(
+            proposal_id
+        )
+
+        if not proposal:
+            await callback.answer(
+                "Материал не найден.",
+                show_alert=True,
+            )
+            return
+
+        if proposal[6] != "PENDING":
+            await callback.answer(
+                f"Материал уже обработан: {proposal[6]}",
+                show_alert=True,
+            )
+            return
 
         await update_knowledge_proposal_status(
             proposal_id,
