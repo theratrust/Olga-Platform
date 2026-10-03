@@ -36,7 +36,7 @@ def register_knowledge(
 )
 
 
-    @dp.message(StateFilter(state_cls.WAITING_FOR_CONTENT), F.text)
+    @dp.message(StateFilter(state_cls.WAITING_FOR_CONTENT), F.text & ~F.text.startswith("/"))
     async def save_knowledge_content(
         message: types.Message,
         state: FSMContext,
