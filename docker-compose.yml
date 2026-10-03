@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: olga_postgres_dev
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: olga_db_dev
+    volumes:
+      - olga_postgres_data_dev:/var/lib/postgresql/data
+    restart: always
+
+  bot:
+    build: .
+    container_name: olga_bot_container_dev
+    depends_on:
+      - db
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgrespassword@db:5432/olga_db_dev
+    restart: always
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  olga_postgres_data_dev:

@@ -1,0 +1,44 @@
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Databases / runtime state
+*.db
+*.sqlite
+*.sqlite3
+
+# Python runtime
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Backups / archives / checkpoints
+backups/
+*.tar.gz
+*.tgz
+*.zip
+
+# Historical manual code backups
+*.backup
+*.backup*
+*.before-*
+*.save
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Credentials / certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
