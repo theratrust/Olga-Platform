@@ -80,3 +80,54 @@ event. Disabled shadow mode produces neither scheduling nor evaluation records.
 Repeated imports do not add handlers or duplicate events. No raw evaluator output,
 user text, headers or credential values are added to logs. Logger changes do not
 change routes, enable/disable shadow mode or alter user delivery.
+
+
+## Offline DEV shadow evidence report
+
+From /opt/olga-coaching-dev, collect only the named DEV container's logs:
+
+```sh
+docker logs --timestamps olga_bot_container_dev 2>&1 | python3 -B scripts/report_shadow_evaluations.py
+```
+
+The reporter itself never runs Docker, imports the bot, calls a model or executes
+routes. It accepts stdin by default (or -) and supports a supplied log file confined
+to the DEV repository, including symlink containment checks:
+
+```sh
+python3 -B scripts/report_shadow_evaluations.py artifacts/evaluation/dev-shadow.log
+python3 -B scripts/report_shadow_evaluations.py --json < artifacts/evaluation/dev-shadow.log
+```
+
+Only aggregate counters are printed. Raw log input, model names, hashes, conversation,
+rationale, excerpts, provider payloads, credentials, headers and environment values
+are never printed. Unknown error-kind strings are grouped as other_error rather
+than echoed. The reporter retains safe enums/numbers/flags only; malformed/unrelated
+lines are counted and ignored. Do not persist unfiltered Docker logs into Git;
+stdin avoids creating a raw log copy.
+
+Scheduled records count accepted work only. Completed records count terminal OK,
+RECOVERED and evaluator FAIL events. capacity_exceeded and configuration_or_scheduling_error
+are separate non-evaluation failures, not completions. Completion rate is completed /
+scheduled, or null/n/a without schedules. A partial log window can yield a rate above
+100%; it is not clamped or treated as evidence of successful matching to a schedule.
+
+Route rates use final-contract-valid completed evaluations. Hard-fail rate uses final
+valid records with an explicit Boolean hard_fail. Each HF ID counts at most once per
+valid evaluation. Scores show 0/1/2/null frequencies for valid records; absent or
+invalid score fields are excluded. First/final valid rates use completed records
+with their corresponding explicit Boolean flag. Retry-attempt rate uses records
+with that flag; recovery rate uses retried records with a recovery flag. Missing
+flags are unknown and excluded, not counted as false. Denominators are included in
+JSON output. Error frequencies include safe failures from both completed and dropped
+work. Latency uses finite nonnegative terminal latency_ms values; p95 is nearest
+rank (ceil(0.95*n)), with null/n/a for an empty set.
+
+Deduplication uses event type, normalized timestamp and valid candidate/session
+hashes, when present. Timestamp is required; missing hashes fall back to event/time.
+Scheduled and terminal records are separate; identical candidates at different times
+remain distinct. Deduplication applies within one input run: concatenating repeated
+log captures does not double-count identical events. Without runtime attempt IDs,
+conflicting records or separate events sharing the same identity cannot be resolved
+by this observational reporter. It provides no methodology gold comparison,
+qualification approval, assurance verdict or routing action.
