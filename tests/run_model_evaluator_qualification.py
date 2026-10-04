@@ -23,6 +23,7 @@ def main(argv=None):
     parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--max-cases", type=int)
+    parser.add_argument("--no-structural-retry", action="store_true")
     parser.add_argument("--max-tokens", "--max-output-tokens", type=int, default=2500)
     parser.add_argument("--reasoning-format", choices=("reasoning", "reasoning_effort"), default="reasoning")
     reasoning = parser.add_mutually_exclusive_group()
@@ -63,6 +64,7 @@ def main(argv=None):
     if not args.live:
         print(f"DRY RUN: model={sanitize(config.model)}; planned_cases={len(cases)}; timeout={config.timeout:g}s; max_tokens={config.max_tokens}")
         print("Reasoning configuration:", sanitize(config.reasoning or config.reasoning_effort or "omitted"))
+        print(f"Structural retry: max_attempts={1 if args.no_structural_retry else 2}; no transport/provider retries.")
         print("Prompts built; zero network calls; no artifacts written. API credentials are required only for --live.")
         return 0
     # Do not print the URL, credentials, headers, model response, or environment.
@@ -72,18 +74,23 @@ def main(argv=None):
         return 2
     try:
         report = qualify(cases, builder, OpenAICompatibleAdapter(config), config,
-                         live=True, project_root=PROJECT_ROOT, secret=secret)
+                         live=True, project_root=PROJECT_ROOT, secret=secret, retry_enabled=not args.no_structural_retry)
         artifact = write_report(report, secret=secret, project_root=PROJECT_ROOT)
     except (AdapterError, ContractError, ValueError, OSError, UnicodeError):
         print("FAIL: qualification or artifact infrastructure error.")
         return 1
     for record in report["cases"]:
-        print(f"{record['outcome']} {record['case_id']}")
+        prefix = "RECOVERED_" if record.get("recovered") else ""
+        print(f"{prefix}{record['outcome']} {record['case_id']}")
     metrics = report["metrics"]
     print(f"Summary: {len(cases)} cases; infrastructure_failures={metrics['infrastructure_failures']}; "
           f"semantic_label_mismatches={metrics['semantic_label_mismatches']}; "
           f"semantic_pass_detail_variance={metrics['semantic_pass_detail_variance']}; "
           f"exact_matches={metrics['exact_matches']}")
+    print(f"Reliability: first_pass_infrastructure_failures={metrics['first_pass_infrastructure_failures']}; "
+          f"retry_attempted_cases={metrics['retry_attempted_cases']}; "
+          f"retry_recovered_cases={metrics['retry_recovered_cases']}; "
+          f"final_infrastructure_failures={metrics['final_infrastructure_failures']}")
     print("Report:", artifact.relative_to(PROJECT_ROOT))
     return 1 if report["metrics"]["infrastructure_failures"] else 0
 

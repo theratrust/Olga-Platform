@@ -23,7 +23,14 @@ from services.evaluation.model_adapter import (
     OpenAICompatibleAdapter, _NoRedirect, parse_model_json, sanitize,
 )
 from services.evaluation.prompt import EvaluatorPromptBuilder
-from services.evaluation.qualification import load_labeled_cases, qualify, select_cases, write_report, model_slug
+from services.evaluation.qualification import load_labeled_cases, qualify as qualify_with_retry, select_cases, write_report, model_slug
+
+
+def qualify(*args, **kwargs):
+    """Existing first-pass tests deliberately disable recovery."""
+    kwargs.setdefault("retry_enabled", False)
+    return qualify_with_retry(*args, **kwargs)
+
 
 CASES = load_labeled_cases()
 BY_ID = {case["id"]: case for case in CASES}
@@ -286,7 +293,7 @@ def test_mock_live_cli_reports_without_network(monkeypatch, capsys, kind, exit_c
         result["decision"] = "accept"
     output = "broken" if kind == "parse" else AdapterError("timeout") if kind == "timeout" else json.dumps(result)
     monkeypatch.setenv(CONFIG.api_key_env, "test-only-secret")
-    monkeypatch.setattr(module, "OpenAICompatibleAdapter", lambda config: FakeModel([output]))
+    monkeypatch.setattr(module, "OpenAICompatibleAdapter", lambda config: FakeModel([output, output]))
     captured = []
     def save(report, **kwargs):
         captured.append(report)
@@ -870,3 +877,178 @@ def test_any_length_termination_bypasses_evaluator_validation(monkeypatch, conte
     assert "SYNTHETIC_KEY" not in json.dumps(report)
     assert report["metrics"]["infrastructure_failures"] == 1
     assert report["metrics"]["contract_valid_cases"] == 0
+
+
+@pytest.mark.parametrize("failure", ["malformed", "truncated", "empty", "structure"])
+def test_structural_retry_recovers_and_preserves_attempts(failure):
+    case = BY_ID["advice_pass"]
+    bad = copy.deepcopy(case["expected"])
+    del bad["scores"]
+    outputs = {"malformed": "broken", "truncated": AdapterError("truncated_response"),
+               "empty": AdapterError("empty_response"), "structure": json.dumps(bad)}
+    model = FakeModel([outputs[failure], json.dumps(case["expected"])])
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    assert row["attempt_count"] == 2 and len(model.calls) == 2
+    assert row["first_attempt"]["outcome"] == "INFRA_FAIL"
+    assert row["first_attempt"]["error"] is not None
+    assert row["retry_attempt"]["outcome"] == "EXACT_MATCH"
+    assert row["retry_attempt"]["error"] is None
+    assert row["outcome"] == "EXACT_MATCH" and row["recovered"]
+    assert row["final_selected_result"] == validate_case(case)
+    assert row["latency_seconds"] == sum(row[key]["latency_seconds"] for key in ("first_attempt", "retry_attempt"))
+    repair = model.calls[1][-1]["content"]
+    assert "Предыдущий ответ не прошёл техническую проверку формата." in repair
+    assert "Не используй Markdown-блоки." in repair
+    if failure == "structure":
+        assert "Нарушен набор обязательных" in repair
+    metrics = report["metrics"]
+    assert metrics["first_pass_contract_valid_cases"] == 0
+    assert metrics["first_pass_contract_valid_rate"] == 0
+    assert metrics["first_pass_infrastructure_failures"] == 1
+    assert metrics["retry_attempted_cases"] == metrics["retry_recovered_cases"] == 1
+    assert metrics["retry_recovery_rate"] == 1
+    assert metrics["final_contract_valid_cases"] == 1
+    assert metrics["final_contract_valid_rate"] == 1
+    assert metrics["final_infrastructure_failures"] == 0
+
+
+@pytest.mark.parametrize("outcome", ["EXACT_MATCH", "SEMANTIC_MISMATCH", "SEMANTIC_PASS_DETAIL_VARIANCE"])
+def test_valid_judgments_never_retry(outcome):
+    case = BY_ID["advice_fail"] if outcome == "SEMANTIC_MISMATCH" else BY_ID["advice_pass"]
+    actual = copy.deepcopy(BY_ID["advice_pass"]["expected"])
+    if outcome == "SEMANTIC_PASS_DETAIL_VARIANCE":
+        actual["reason"] = "Сохранено авторство клиента."
+    model = FakeModel([json.dumps(actual)])
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    assert row["outcome"] == outcome
+    assert row["attempt_count"] == 1 and len(model.calls) == 1
+    assert row["retry_attempt"] is None and not row["recovered"]
+    assert report["metrics"]["retry_recovery_rate"] is None
+
+
+@pytest.mark.parametrize("failure", ["timeout", "transport_error", "http_error", "provider_error", "priority", "evidence"])
+def test_nonstructural_infrastructure_failures_never_retry(failure):
+    case = BY_ID["advice_fail"]
+    invalid = copy.deepcopy(case["expected"])
+    if failure == "priority":
+        invalid["decision"] = "accept"
+    elif failure == "evidence":
+        invalid["violations"][0]["excerpt"] = "NONEXISTENT_EXCERPT"
+    output = json.dumps(invalid) if failure in ("priority", "evidence") else AdapterError(failure)
+    model = FakeModel([output])
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    assert row["outcome"] == "INFRA_FAIL" and row["attempt_count"] == 1
+    assert len(model.calls) == 1 and row["retry_attempt"] is None
+
+
+def test_retry_failure_is_final_and_maximum_two_attempts():
+    model = FakeModel(["broken", "still broken", json.dumps(CASES[0]["expected"])])
+    report = qualify_with_retry(CASES[:1], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    assert len(model.calls) == row["attempt_count"] == 2
+    assert row["first_attempt"]["error"]["kind"] == "malformed_model_json"
+    assert row["retry_attempt"]["error"]["kind"] == "malformed_model_json"
+    assert row["outcome"] == "INFRA_FAIL" and not row["recovered"]
+    assert row["final_selected_result"] is None
+    assert report["metrics"]["retry_recovery_rate"] == 0
+    assert report["metrics"]["final_infrastructure_failures"] == 1
+
+
+@pytest.mark.parametrize("outcome", ["SEMANTIC_MISMATCH", "SEMANTIC_PASS_DETAIL_VARIANCE"])
+def test_recovered_semantics_use_final_result_without_false_exact_match(outcome):
+    case = BY_ID["advice_fail"] if outcome == "SEMANTIC_MISMATCH" else BY_ID["advice_pass"]
+    actual = copy.deepcopy(BY_ID["advice_pass"]["expected"])
+    actual["reason"] = "Сохранено авторство клиента."
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), FakeModel(["broken", json.dumps(actual)]), CONFIG, live=True)
+    row = report["cases"][0]
+    assert row["outcome"] == outcome and row["recovered"]
+    assert report["metrics"]["exact_matches"] == 0
+    assert report["metrics"]["retry_recovered_cases"] == 1
+    assert report["metrics"]["semantic_label_mismatches"] == (outcome == "SEMANTIC_MISMATCH")
+
+
+def test_retry_prompt_has_no_gold_and_no_prior_output():
+    case = copy.deepcopy(BY_ID["advice_pass"])
+    case["expected"]["reason"] = "UNIQUE_GOLD_REASON_MARKER"
+    model = FakeModel(['{"unknown":"UNTRUSTED_PRIOR_OUTPUT"}', json.dumps(case["expected"])])
+    qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    original = EvaluatorPromptBuilder().build(case["input"])
+    assert model.calls[1][:-1] == original
+    encoded = json.dumps(model.calls[1])
+    assert "UNIQUE_GOLD_REASON_MARKER" not in encoded
+    assert "UNTRUSTED_PRIOR_OUTPUT" not in encoded
+    # Retry addition consists solely of the format instruction and a static schema diagnostic.
+    assert "expected" not in model.calls[1][-1]["content"]
+    assert "hard_fail" not in model.calls[1][-1]["content"]
+    assert "HF01" not in model.calls[1][-1]["content"]
+
+
+def test_retry_artifact_preserves_both_attempts_with_redaction():
+    secret = "SYNTHETIC_RETRY_SECRET"
+    first = AdapterError("truncated_response", raw_response={"content": secret, "reasoning": "PRIVATE_REASONING"},
+                         details={"message": "Authorization: Bearer " + secret}, secret=secret)
+    actual = copy.deepcopy(BY_ID["advice_pass"]["expected"])
+    actual["reason"] = "Authorization: Bearer " + secret
+    report = qualify_with_retry([BY_ID["advice_pass"]], EvaluatorPromptBuilder(),
+                               FakeModel([first, json.dumps(actual)]), CONFIG, live=True, secret=secret)
+    with tempfile.TemporaryDirectory(dir=PROJECT_ROOT / "tests") as directory:
+        artifact = write_report(report, project_root=Path(directory), secret=secret)
+        encoded = artifact.read_text()
+        stored = json.loads(encoded)["cases"][0]
+    assert secret not in encoded and "PRIVATE_REASONING" not in encoded
+    assert stored["first_attempt"]["outcome"] == "INFRA_FAIL"
+    assert stored["retry_attempt"]["outcome"] == "SEMANTIC_PASS_DETAIL_VARIANCE"
+    assert stored["recovered"] and stored["attempt_count"] == 2
+
+
+def test_retry_mixed_reliability_metrics_and_order():
+    selected = [BY_ID["advice_pass"], BY_ID["advice_fail"], BY_ID["unknown_space"]]
+    model = FakeModel([json.dumps(selected[0]["expected"]), "broken", json.dumps(selected[1]["expected"]), AdapterError("timeout")])
+    report = qualify_with_retry(selected, EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    assert [row["case_id"] for row in report["cases"]] == [case["id"] for case in selected]
+    metrics = report["metrics"]
+    assert metrics["first_pass_contract_valid_cases"] == 1
+    assert metrics["first_pass_contract_valid_rate"] == 1 / 3
+    assert metrics["first_pass_infrastructure_failures"] == 2
+    assert metrics["retry_attempted_cases"] == metrics["retry_recovered_cases"] == 1
+    assert metrics["final_contract_valid_cases"] == 2
+    assert metrics["final_contract_valid_rate"] == 2 / 3
+    assert metrics["final_infrastructure_failures"] == 1
+    assert metrics["exact_full_result_match_rate"] == 2 / 3
+
+
+def test_recovered_console_prefix(monkeypatch, capsys):
+    cli = runner()
+    actual = copy.deepcopy(BY_ID["advice_pass"]["expected"])
+    actual["reason"] = "Сохранено авторство клиента."
+    report = qualify_with_retry([BY_ID["advice_pass"]], EvaluatorPromptBuilder(),
+                               FakeModel(["broken", json.dumps(actual)]), CONFIG, live=True)
+    monkeypatch.setenv(CONFIG.api_key_env, "synthetic-credential")
+    monkeypatch.setattr(cli, "qualify", lambda *a, **k: report)
+    monkeypatch.setattr(cli, "OpenAICompatibleAdapter", lambda *a: FakeModel([]))
+    monkeypatch.setattr(cli, "write_report", lambda *a, **k: PROJECT_ROOT / "artifacts/evaluation/mock.json")
+    assert cli.main(["--model", CONFIG.model, "--base-url", CONFIG.base_url,
+                     "--api-key-env", CONFIG.api_key_env, "--live", "--max-cases", "1"]) == 0
+    assert "RECOVERED_SEMANTIC_PASS_DETAIL_VARIANCE advice_pass" in capsys.readouterr().out
+
+
+def test_retry_metrics_zero_cases():
+    metrics = calculate_metrics([], 0)
+    for key in ("first_pass_contract_valid_cases", "first_pass_infrastructure_failures",
+                "retry_attempted_cases", "retry_recovered_cases", "final_contract_valid_cases",
+                "final_infrastructure_failures"):
+        assert metrics[key] == 0
+    for key in ("first_pass_contract_valid_rate", "retry_recovery_rate", "final_contract_valid_rate"):
+        assert metrics[key] is None
+
+
+def test_retry_can_be_disabled_explicitly():
+    model = FakeModel(["broken"])
+    report = qualify_with_retry(CASES[:1], EvaluatorPromptBuilder(), model, CONFIG,
+                               live=True, retry_enabled=False)
+    assert len(model.calls) == report["cases"][0]["attempt_count"] == 1
+    assert report["metadata"]["max_attempts"] == 1
+    assert report["metrics"]["retry_attempted_cases"] == 0

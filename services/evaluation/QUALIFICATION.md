@@ -49,7 +49,8 @@ array order; it is a strict diagnostic rather than a semantic-quality threshold.
 No single aggregate acceptance score or automatic model approval is defined.
 
 Adapter, malformed JSON, and contract-invalid results are infrastructure failures:
-the run continues, writes a report, and exits nonzero. Contract-valid semantic
+the run continues, writes a report, and exits nonzero if infrastructure failure
+persists after any eligible structural retry. Contract-valid semantic
 mismatches are reported and do not cause an infrastructure failure exit code.
 Dry-run success demonstrates prompt/configuration readiness, not provider readiness
 or model qualification. Pytest uses mocked transports and results only.
@@ -138,3 +139,38 @@ semantic_label_mismatch_cases metric is retained as an alias count. Agreement
 rates, exact full-result match rate, HF precision/recall, denominators and latency
 semantics remain unchanged. Detail variance is not full equality or automatic
 model qualification. Scores still must satisfy the canonical contract.
+
+
+## Bounded structural recovery (report version 1.3)
+
+Qualification enables one output-format retry by default (maximum two dispatches
+per case). --no-structural-retry disables recovery for a first-pass-only run.
+Eligible failures are truncated_response, empty_response, malformed_model_json,
+and contract-invalid structural/schema errors recognized by a conservative
+allowlist of shape, required/unknown fields, types, nonempty values and enums.
+Evidence-reference/excerpt failures and decision-priority inconsistencies are not
+eligible. Transport, timeout, HTTP and provider errors have no added retry policy.
+Valid judgments, semantic mismatch and detail variance are never retry triggers.
+
+Retry sends the original evaluator prompt and synthetic input plus a Russian
+format-only correction. For structural contract failures it adds a static, sanitized
+schema diagnostic; raw validator exceptions, previous output/reasoning and gold
+results are never supplied. The retry does not change generation parameters.
+There are no recursive retries. A failed second attempt remains INFRA_FAIL.
+
+Each case preserves first_attempt and optional retry_attempt, each with sanitized
+evidence, outcome/error, parsed/validated results and dispatch-to-validation
+latency. attempt_count, recovered and final_selected_result are explicit. Existing
+top-level result fields select the final attempt. Case latency sums attempt
+latencies; total elapsed includes retry preparation. Recovered console outcomes
+are prefixed RECOVERED_ and retain the actual final comparison category.
+
+Metrics add first_pass_contract_valid_cases, first_pass_contract_valid_rate,
+first_pass_infrastructure_failures; retry_attempted_cases, retry_recovered_cases,
+retry_recovery_rate; final_contract_valid_cases, final_contract_valid_rate,
+final_infrastructure_failures. First/final rates use cases as denominator; recovery
+rate uses retried cases and is null when no retry occurs. Recovery means contract
+validity, regardless of semantic agreement. Existing agreement/HF/full-result
+metrics use final selected results, keep their case denominators and exclusions,
+and do not count retries as additional corpus cases. First-attempt failures remain
+visible even after recovery. Dry-run remains network-free and writes no artifacts.

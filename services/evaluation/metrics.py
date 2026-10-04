@@ -66,4 +66,15 @@ def calculate_metrics(records, elapsed_seconds):
     metrics.update(semantic_label_mismatches=outcomes.count("SEMANTIC_MISMATCH"),
                    semantic_pass_detail_variance=outcomes.count("SEMANTIC_PASS_DETAIL_VARIANCE"),
                    exact_matches=outcomes.count("EXACT_MATCH"))
+    first_valid = sum(record.get("first_attempt", record)["contract_valid"] for record in records)
+    retried = sum(record.get("retry_attempt") is not None for record in records)
+    recovered = sum(bool(record.get("recovered")) for record in records)
+    metrics.update(first_pass_contract_valid_cases=first_valid,
+                   first_pass_contract_valid_rate=rate(first_valid, count),
+                   first_pass_infrastructure_failures=count-first_valid,
+                   retry_attempted_cases=retried, retry_recovered_cases=recovered,
+                   retry_recovery_rate=rate(recovered, retried),
+                   final_contract_valid_cases=len(valid),
+                   final_contract_valid_rate=rate(len(valid), count),
+                   final_infrastructure_failures=count-len(valid))
     return metrics
