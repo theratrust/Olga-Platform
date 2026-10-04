@@ -2,7 +2,8 @@
 
 from .contract import RULE_IDS
 
-SEMANTIC_LABELS = ("hard_fail", "overall", "decision", "insufficient_context", "hf_rules")
+ROUTING_LABELS = ("hard_fail", "overall", "decision", "insufficient_context")
+SEMANTIC_LABELS = ROUTING_LABELS + ("hf_rules",)
 
 
 def qualification_outcome(contract_valid, comparison):
@@ -10,8 +11,10 @@ def qualification_outcome(contract_valid, comparison):
     if not contract_valid:
         return "INFRA_FAIL"
     matches = comparison["matches"]
-    if any(not matches[key] for key in SEMANTIC_LABELS):
+    if any(not matches[key] for key in ROUTING_LABELS):
         return "SEMANTIC_MISMATCH"
+    if not matches["hf_rules"]:
+        return "ROUTING_MATCH_TAXONOMY_VARIANCE"
     return "EXACT_MATCH" if matches["full_result"] else "SEMANTIC_PASS_DETAIL_VARIANCE"
 
 
@@ -63,7 +66,9 @@ def calculate_metrics(records, elapsed_seconds):
                    latency_seconds_by_case={record["case_id"]: record["latency_seconds"] for record in records})
     outcomes = [qualification_outcome(record["contract_valid"], record.get("comparison"))
                 for record in records]
-    metrics.update(semantic_label_mismatches=outcomes.count("SEMANTIC_MISMATCH"),
+    metrics.update(routing_semantic_mismatch_cases=outcomes.count("SEMANTIC_MISMATCH"),
+                   routing_match_taxonomy_variance_cases=outcomes.count("ROUTING_MATCH_TAXONOMY_VARIANCE"),
+                   semantic_label_mismatches=outcomes.count("SEMANTIC_MISMATCH"),
                    semantic_pass_detail_variance=outcomes.count("SEMANTIC_PASS_DETAIL_VARIANCE"),
                    exact_matches=outcomes.count("EXACT_MATCH"))
     first_valid = sum(record.get("first_attempt", record)["contract_valid"] for record in records)

@@ -811,9 +811,10 @@ def test_console_separates_four_outcomes(monkeypatch, capsys):
     output = capsys.readouterr().out
     for outcome in ("EXACT_MATCH", "SEMANTIC_PASS_DETAIL_VARIANCE", "SEMANTIC_MISMATCH", "INFRA_FAIL"):
         assert outcome + " " in output
-    for key in ("infrastructure_failures", "semantic_label_mismatches",
+    for key in ("infrastructure_failures", "routing_semantic_mismatches",
                 "semantic_pass_detail_variance", "exact_matches"):
         assert key + "=1" in output
+    assert "routing_match_taxonomy_variance=0" in output
 
 
 @pytest.mark.parametrize("label", ["hard_fail", "overall", "decision", "hf_rules", "insufficient_context"])
@@ -823,7 +824,8 @@ def test_each_semantic_label_difference_is_mismatch(label):
                   ("hard_fail", "overall", "decision", "hf_rules", "insufficient_context", "full_result")}}
     comparison["matches"][label] = False
     comparison["matches"]["full_result"] = False
-    assert qualification_outcome(True, comparison) == "SEMANTIC_MISMATCH"
+    expected = "ROUTING_MATCH_TAXONOMY_VARIANCE" if label == "hf_rules" else "SEMANTIC_MISMATCH"
+    assert qualification_outcome(True, comparison) == expected
 
 
 def test_zero_attempts_outcome_counts():
@@ -1198,3 +1200,79 @@ def test_path_containment_and_filesystem_failures_are_not_repairable(message):
     assert diagnostic["contract_error_kind"] == "invalid_source_path"
     assert diagnostic["structural_retry_eligible"] is False
     assert "permission denied" not in diagnostic["contract_error"]
+
+
+def taxonomy_variant(case):
+    actual = copy.deepcopy(case["expected"])
+    if len(actual["violations"]) > 1:
+        actual["violations"].pop()
+    else:
+        actual["violations"][0]["rule_id"] = "HF02" if actual["violations"][0]["rule_id"] != "HF02" else "HF04"
+    return actual
+
+
+@pytest.mark.parametrize("case_id", ["archetype_fail", "invented_emotion"])
+@pytest.mark.parametrize("recovered", [False, True])
+def test_taxonomy_variance_preserves_routing_and_hf_metrics(case_id, recovered):
+    case = BY_ID[case_id]
+    actual = taxonomy_variant(case)
+    outputs = (["broken"] if recovered else []) + [json.dumps(actual)]
+    model = FakeModel(outputs)
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    assert row["outcome"] == "ROUTING_MATCH_TAXONOMY_VARIANCE"
+    assert row["recovered"] is recovered
+    assert len(model.calls) == row["attempt_count"] == (2 if recovered else 1)
+    for key in ("hard_fail", "overall", "decision", "insufficient_context"):
+        assert row["comparison"]["matches"][key]
+    assert not row["comparison"]["matches"]["hf_rules"]
+    metrics = report["metrics"]
+    assert metrics["routing_semantic_mismatch_cases"] == 0
+    assert metrics["routing_match_taxonomy_variance_cases"] == 1
+    assert metrics["semantic_label_mismatches"] == 0
+    # Deprecated metric keeps its previous five-label definition.
+    assert metrics["semantic_label_mismatch_cases"] == 1
+    assert metrics["semantic_pass_detail_variance"] == metrics["exact_matches"] == 0
+    baseline = calculate_metrics([metric_row(actual, case["expected"])], 0)
+    for key in ("per_rule", "hf_rule_precision", "hf_rule_recall"):
+        assert metrics[key] == baseline[key]
+    predicted = {item["rule_id"] for item in actual["violations"]}
+    expected = {item["rule_id"] for item in case["expected"]["violations"]}
+    assert metrics["hf_rule_precision"] == len(predicted & expected) / len(predicted)
+    assert metrics["hf_rule_recall"] == len(predicted & expected) / len(expected)
+    if recovered:
+        assert row["first_attempt"]["outcome"] == "INFRA_FAIL"
+        assert row["retry_attempt"]["outcome"] == "ROUTING_MATCH_TAXONOMY_VARIANCE"
+        assert metrics["first_pass_contract_valid_cases"] == 0
+
+
+def test_five_outcome_summary_counters_and_recovered_display(monkeypatch, capsys):
+    cli = runner()
+    case = BY_ID["advice_pass"]
+    detail = copy.deepcopy(case["expected"])
+    detail["reason"] = "Сохранено авторство клиента."
+    taxonomy_case = BY_ID["archetype_fail"]
+    selected = [case, case, taxonomy_case, BY_ID["advice_fail"], case]
+    model = FakeModel([json.dumps(case["expected"]), json.dumps(detail), "broken",
+                       json.dumps(taxonomy_variant(taxonomy_case)), "broken",
+                       json.dumps(case["expected"]), AdapterError("timeout")])
+    report = qualify_with_retry(selected, EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    metrics = report["metrics"]
+    for key in ("infrastructure_failures", "routing_semantic_mismatch_cases",
+                "routing_match_taxonomy_variance_cases", "semantic_pass_detail_variance", "exact_matches"):
+        assert metrics[key] == 1
+    assert metrics["retry_attempted_cases"] == metrics["retry_recovered_cases"] == 2
+    monkeypatch.setenv(CONFIG.api_key_env, "synthetic-credential")
+    monkeypatch.setattr(cli, "qualify", lambda *a, **k: report)
+    monkeypatch.setattr(cli, "OpenAICompatibleAdapter", lambda *a: FakeModel([]))
+    monkeypatch.setattr(cli, "write_report", lambda *a, **k: PROJECT_ROOT / "artifacts/evaluation/mock.json")
+    assert cli.main(["--model", CONFIG.model, "--base-url", CONFIG.base_url,
+                     "--api-key-env", CONFIG.api_key_env, "--live", "--max-cases", "5"]) == 1
+    output = capsys.readouterr().out
+    for line in ("EXACT_MATCH advice_pass", "SEMANTIC_PASS_DETAIL_VARIANCE advice_pass",
+                 "RECOVERED_ROUTING_MATCH_TAXONOMY_VARIANCE archetype_fail",
+                 "RECOVERED_SEMANTIC_MISMATCH advice_fail", "INFRA_FAIL advice_pass"):
+        assert line in output
+    for name in ("infrastructure_failures", "routing_semantic_mismatches",
+                 "routing_match_taxonomy_variance", "semantic_pass_detail_variance", "exact_matches"):
+        assert name + "=1" in output

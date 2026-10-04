@@ -84,7 +84,8 @@ def main(argv=None):
         print(f"{prefix}{record['outcome']} {record['case_id']}")
     metrics = report["metrics"]
     print(f"Summary: {len(cases)} cases; infrastructure_failures={metrics['infrastructure_failures']}; "
-          f"semantic_label_mismatches={metrics['semantic_label_mismatches']}; "
+          f"routing_semantic_mismatches={metrics['routing_semantic_mismatch_cases']}; "
+          f"routing_match_taxonomy_variance={metrics['routing_match_taxonomy_variance_cases']}; "
           f"semantic_pass_detail_variance={metrics['semantic_pass_detail_variance']}; "
           f"exact_matches={metrics['exact_matches']}")
     print(f"Reliability: first_pass_infrastructure_failures={metrics['first_pass_infrastructure_failures']}; "

@@ -205,3 +205,36 @@ are never normalized or repaired by the harness; the model must return valid exa
 references. The canonical validator is unchanged: null scores require present=true
 and missing context items. Both attempts, first-pass reliability, final semantic
 metrics and the maximum of two attempts remain as documented above.
+
+
+## Routing, taxonomy and detail agreement (report version 1.5)
+
+These are separate qualification dimensions. Routing correctness compares hard_fail,
+overall, decision and insufficient_context.present. HF taxonomy quality compares
+rule sets and remains measured independently by per-rule TP/FP/FN and HF precision/
+recall. Detailed structured-result agreement additionally compares scores, rationale,
+source references and ordering after canonical contract normalization.
+
+The current outcome rules supersede the version 1.2 four-outcome definition:
+
+- EXACT_MATCH: contract-valid normalized full result equals expected.
+- SEMANTIC_PASS_DETAIL_VARIANCE: all routing labels and the HF set match; full
+  result differs in details.
+- ROUTING_MATCH_TAXONOMY_VARIANCE: all routing labels match, but the HF set differs.
+  This is not a routing semantic mismatch.
+- SEMANTIC_MISMATCH: at least one of the four routing labels differs.
+- INFRA_FAIL: no final contract-valid result after any permitted structural retry.
+
+Recovered console outcomes keep the RECOVERED_ prefix. Retry eligibility and bounds
+are unchanged: reporting variance is never a retry trigger.
+
+Metrics add routing_semantic_mismatch_cases and routing_match_taxonomy_variance_cases.
+The semantic_label_mismatches compatibility alias is explicitly redefined to mean
+routing_semantic_mismatch_cases. The older semantic_label_mismatch_cases metric is
+retained with its original five-label definition (routing plus HF set) and deprecated
+for routing decisions; taxonomy-only differences still count there. Console summary
+uses infrastructure_failures, routing_semantic_mismatches,
+routing_match_taxonomy_variance, semantic_pass_detail_variance and exact_matches.
+These five mutually exclusive counts sum to attempted corpus cases. Reliability
+metrics remain separate. HF precision/recall, agreement-rate denominators, full-result
+comparison and first/final recovery metrics are unchanged.

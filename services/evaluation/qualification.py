@@ -187,7 +187,7 @@ def qualify(cases, builder, adapter, config, *, live=False, project_root=PROJECT
                       latency_seconds=first["latency_seconds"] + (retry["latency_seconds"] if retry else 0))
         records.append(record)
     elapsed = time.perf_counter() - timer
-    report = {"report_version": "1.4", "metadata": {
+    report = {"report_version": "1.5", "metadata": {
         "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
         "model": config.model, "backend_host": urlsplit(config.base_url).hostname, "timeout_seconds": config.timeout,
         "temperature": 0, "max_tokens": config.max_tokens,
