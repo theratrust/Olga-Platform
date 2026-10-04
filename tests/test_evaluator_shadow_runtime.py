@@ -4,6 +4,8 @@ import asyncio
 import copy
 import importlib.util
 import json
+import logging
+import subprocess
 import socket
 import sys
 import threading
@@ -492,3 +494,80 @@ def test_container_guard_integrates_without_changing_fail_open(monkeypatch, dev_
     assert len(model.calls) == 1
     assert record["log"]["event"] == "SHADOW_EVAL_FAIL"
     assert record["log"]["evaluator_error_kind"] == "timeout"
+
+
+def test_runtime_info_logging_overrides_only_its_own_inherited_warning(monkeypatch, caplog):
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "level", logging.WARNING)
+    assert runtime.LOGGER.getEffectiveLevel() == logging.INFO
+    assert runtime.LOGGER.isEnabledFor(logging.INFO)
+    assert runtime.LOGGER.propagate is True
+    root_handlers = list(root.handlers)
+    runtime_handlers = list(runtime.LOGGER.handlers)
+    run_model([json.dumps(mock_result())])
+    records = [record for record in caplog.records if record.name == runtime.__name__]
+    assert len(records) == 1 and records[0].getMessage().startswith("SHADOW_EVAL_OK ")
+    assert root.level == logging.WARNING
+    assert root.handlers == root_handlers and runtime.LOGGER.handlers == runtime_handlers
+
+
+@pytest.mark.parametrize("status", ["ok", "recovered", "fail"])
+def test_one_scheduled_event_and_one_final_event_without_sensitive_text(caplog, status):
+    outputs = {"ok": [json.dumps(mock_result())],
+               "recovered": ["broken", json.dumps(mock_result())],
+               "fail": [AdapterError("timeout")]}
+    model = Model(outputs[status])
+    def worker(context, user, candidate, **kwargs):
+        return runtime.evaluate_candidate_shadow(context, user, candidate, adapter=model, **kwargs)
+    async def scenario():
+        manager = runtime.ShadowDispatcher(CONFIG, worker)
+        assert manager.submit(CONTEXT, "Я не знаю.", CANDIDATE, session_id="PRIVATE_SESSION_ID")
+        await manager.close()
+    asyncio.run(scenario())
+    records = [record for record in caplog.records if record.name == runtime.__name__]
+    events = [json.loads(record.getMessage().split(" ", 1)[1]) for record in records]
+    expected_final = {"ok": "SHADOW_EVAL_OK", "recovered": "SHADOW_EVAL_RECOVERED", "fail": "SHADOW_EVAL_FAIL"}[status]
+    assert [event["event"] for event in events] == ["SHADOW_EVAL_SCHEDULED", expected_final]
+    scheduled = events[0]
+    assert scheduled["mode"] == "shadow" and scheduled["evaluator_model"] == "z-ai/glm-5.2"
+    assert len(scheduled["candidate_hash"]) == len(scheduled["session_hash"]) == 64
+    for secret in (CANDIDATE, "Я не знаю.", "PRIVATE_SESSION_ID", "SYNTHETIC_SHADOW_KEY", "PROVIDER_RAW_NOT_FOR_LOGS"):
+        assert secret not in caplog.text
+
+
+def test_disabled_shadow_emits_no_scheduling_or_evaluation_records(caplog):
+    model = Model([])
+    async def scenario():
+        manager = runtime.ShadowDispatcher(runtime.ShadowConfig(), lambda *a, **k: pytest.fail("No evaluator call"))
+        assert not manager.submit(CONTEXT, "Я не знаю.", CANDIDATE)
+        await manager.close()
+    asyncio.run(scenario())
+    assert runtime.evaluate_candidate_shadow(CONTEXT, "Я не знаю.", CANDIDATE,
+                                            config=runtime.ShadowConfig(), adapter=model) is None
+    assert model.calls == []
+    assert not [record for record in caplog.records if record.name == runtime.__name__]
+
+
+def test_repeated_import_does_not_duplicate_stream_output_or_change_root_policy():
+    # Isolated logging setup mirrors an existing Docker stderr handler; no bot import.
+    code = """
+import importlib, io, logging
+stream = io.StringIO()
+root = logging.getLogger()
+root.setLevel(logging.WARNING)
+handler = logging.StreamHandler(stream)
+root.addHandler(handler)
+from services.evaluation import runtime
+importlib.reload(runtime)
+importlib.reload(runtime)
+assert root.level == logging.WARNING
+assert root.handlers == [handler]
+assert not runtime.LOGGER.handlers
+assert runtime.LOGGER.propagate
+runtime._emit({"event": "SHADOW_EVAL_OK", "mode": "shadow"})
+assert len(stream.getvalue().splitlines()) == 1
+assert stream.getvalue().startswith("SHADOW_EVAL_OK ")
+"""
+    result = subprocess.run([sys.executable, "-B", "-c", code], cwd=ROOT,
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr

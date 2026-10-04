@@ -18,6 +18,9 @@ from .prompt import EvaluatorPromptBuilder
 from .repair import contract_diagnostic, retry_eligible, retry_messages
 
 LOGGER = logging.getLogger(__name__)
+# Use the process's existing output handler without changing root policy.
+LOGGER.setLevel(logging.INFO)
+LOGGER.propagate = True
 DEV_ROOT = Path("/opt/olga-coaching-dev")
 
 
@@ -209,6 +212,13 @@ class ShadowDispatcher:
             task = loop.create_task(observe())
             self.tasks.add(task)
             task.add_done_callback(self._done)
+            _emit(sanitize({"timestamp": datetime.now(timezone.utc).isoformat(),
+                            "mode": "shadow", "event": "SHADOW_EVAL_SCHEDULED",
+                            "evaluator_model": config.model,
+                            "candidate_hash": hashlib.sha256(candidate_response.encode("utf-8")).hexdigest(),
+                            "session_hash": hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()
+                                if session_id is not None else None},
+                           os.environ.get("OPENROUTER_API_KEY")))
             return True
         except Exception:
             _emit({"timestamp": datetime.now(timezone.utc).isoformat(), "mode": "shadow",

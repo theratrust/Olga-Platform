@@ -61,3 +61,22 @@ and environment data. Hashes are correlation identifiers, not anonymization.
 The service returns sanitized canonical results/attempt metadata to its caller;
 those are not written into logs. No qualification outcome labels are emitted.
 No route is executed yet. No live evaluator calls were made in implementation tests.
+
+
+## Logger and scheduling visibility
+
+Only services.evaluation.runtime explicitly sets its logger to INFO with
+propagate=True. It installs no handler and leaves root and unrelated logger policy
+unchanged. Events flow to the bot's existing output handler (normally stderr,
+captured by Docker logs). If an operator explicitly configures an output handler
+above INFO, that handler can still filter these records; this module does not
+override handler filters or global logging configuration.
+
+SHADOW_EVAL_SCHEDULED is emitted once after background-task acceptance, with
+timestamp, mode, model and candidate/session hashes only. The existing final
+SHADOW_EVAL_OK/SHADOW_EVAL_RECOVERED/SHADOW_EVAL_FAIL records are retained. Saturation
+continues to produce SHADOW_EVAL_FAIL with capacity_exceeded, never a scheduled
+event. Disabled shadow mode produces neither scheduling nor evaluation records.
+Repeated imports do not add handlers or duplicate events. No raw evaluator output,
+user text, headers or credential values are added to logs. Logger changes do not
+change routes, enable/disable shadow mode or alter user delivery.
