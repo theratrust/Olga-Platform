@@ -83,10 +83,13 @@ positives makes recall null. A zero numerator with a positive denominator is 0.
 Only message.content is an evaluator output. message.reasoning, reasoning_content,
 and reasoning_details are never parsed as candidate JSON and are removed from
 persisted debug envelopes; only a reasoning_present Boolean is retained.
-An HTTP-success response with finish_reason=length and null/empty/whitespace
-content is truncated_response, not empty_response. Without length, missing output
-remains empty_response. Nonempty content remains subject to strict JSON parsing
-and contract validation, even when the finish reason is length. Safe completion
+An HTTP-success response with finish_reason=length or native_finish_reason=length
+is truncated_response regardless of content: null, empty, whitespace, partial JSON
+or apparently complete JSON. Provider-declared length termination makes output
+completeness untrustworthy. Content never enters evaluator parsing or contract
+validation; sanitized content is retained only in the debug envelope. Without a
+length marker, missing output remains empty_response and nonempty content remains
+subject to strict JSON parsing and contract validation. Safe completion
 metadata records HTTP status, finish_reason, optional native_finish_reason, model,
 provider/backend host and reasoning presence. Latency remains on the case record.
 

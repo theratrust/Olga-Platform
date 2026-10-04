@@ -637,7 +637,7 @@ def test_truncation_never_parses_reasoning_and_later_case_continues(monkeypatch)
 def test_content_only_parsed_with_reasoning_fields_removed(monkeypatch, reasoning_key):
     monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
     content = json.dumps(CASES[0]["expected"])
-    payload = {"choices": [{"finish_reason": "length", "message": {
+    payload = {"choices": [{"finish_reason": "stop", "message": {
         "content": content, reasoning_key: "PRIVATE_REASONING_MARKER"}}]}
     adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
     reply = adapter.complete([], live=True)
@@ -824,3 +824,49 @@ def test_zero_attempts_outcome_counts():
     for key in ("infrastructure_failures", "semantic_label_mismatches",
                 "semantic_pass_detail_variance", "exact_matches"):
         assert metrics[key] == 0
+
+
+@pytest.mark.parametrize("content", [None, "", " \t\n", '{"reason":"SYNTHETIC_KEY",',
+                                     json.dumps(BY_ID["advice_pass"]["expected"])],
+                         ids=["null", "empty", "whitespace", "partial-json", "complete-json"])
+@pytest.mark.parametrize("marker", ["finish", "native-choice", "native-envelope"])
+def test_any_length_termination_bypasses_evaluator_validation(monkeypatch, content, marker):
+    from services.evaluation import qualification as q
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    choice = {"finish_reason": "length" if marker == "finish" else "stop",
+              "message": {"content": content, "reasoning": "PRIVATE_REASONING_MARKER"}}
+    payload = {"provider": "synthetic-provider", "choices": [choice]}
+    if marker == "native-choice":
+        choice["native_finish_reason"] = "length"
+    elif marker == "native-envelope":
+        payload["native_finish_reason"] = "length"
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Length-terminated content must bypass parsing and contract validation")
+    monkeypatch.setattr(q, "parse_model_json", forbidden)
+    monkeypatch.setattr(q, "validate_result", forbidden)
+    report = qualify([BY_ID["advice_pass"]], EvaluatorPromptBuilder(), adapter, CONFIG,
+                     live=True, secret="SYNTHETIC_KEY")
+    row = report["cases"][0]
+    assert row["outcome"] == "INFRA_FAIL"
+    assert row["error"]["kind"] == "truncated_response"
+    assert not row["contract_valid"]
+    assert row["raw_model_output"] is None
+    assert row["parsed_result"] is None and row["validated_result"] is None
+    assert row["comparison"] is None
+    metadata = row["response_metadata"]
+    assert metadata["finish_reason"] == choice["finish_reason"]
+    if marker != "finish":
+        assert metadata["native_finish_reason"] == "length"
+    assert metadata["model"] == CONFIG.model
+    assert metadata["provider"] == "synthetic-provider"
+    assert metadata["backend_host"] == "127.0.0.1"
+    assert metadata["reasoning_present"] is True
+    assert metadata["http_status"] == 200
+    assert row["latency_seconds"] >= 0
+    debug = json.loads(row["raw_response"])
+    assert debug["choices"][0]["message"]["content"] == sanitize(content, "SYNTHETIC_KEY")
+    assert "PRIVATE_REASONING_MARKER" not in json.dumps(report)
+    assert "SYNTHETIC_KEY" not in json.dumps(report)
+    assert report["metrics"]["infrastructure_failures"] == 1
+    assert report["metrics"]["contract_valid_cases"] == 0

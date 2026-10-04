@@ -281,9 +281,11 @@ class OpenAICompatibleAdapter:
             bool(value.strip()) if isinstance(value, str) else bool(value)
             for name in ("reasoning", "reasoning_content", "reasoning_details")
             for value in [message.get(name)])
+        # Provider-declared length termination is untrusted even for complete JSON.
+        if details["finish_reason"] == "length" or details.get("native_finish_reason") == "length":
+            raise AdapterError("truncated_response", raw_response=raw, details=details, secret=key)
         if text is None or isinstance(text, str) and not text.strip():
-            kind = "truncated_response" if details["finish_reason"] == "length" else "empty_response"
-            raise AdapterError(kind, raw_response=raw, details=details, secret=key)
+            raise AdapterError("empty_response", raw_response=raw, details=details, secret=key)
         if not isinstance(text, str):
             raise AdapterError("response_format_error", raw_response=raw, details=details, secret=key)
         # Evaluator text is parsed unchanged; debug envelopes are sanitized now.
