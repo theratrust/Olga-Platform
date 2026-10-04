@@ -34,6 +34,11 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "z-ai/glm-5.2")
 
+DEV_DIRECT_CHAT = os.getenv(
+    "DEV_DIRECT_CHAT",
+    "false",
+).strip().lower() in {"1", "true", "yes", "on"}
+
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", os.getenv("OLGA_ADMIN_ID", "5158427705"))
 ADMIN_IDS = [int(aid.strip()) for aid in ADMIN_IDS_RAW.split(",") if aid.strip().isdigit()]
 
@@ -159,6 +164,7 @@ ai_chat_handler = register_chat(
     get_recent_history=get_recent_history,
     create_pending_draft=create_pending_draft,
     clear_chat_history=clear_chat_history,
+    direct_chat=DEV_DIRECT_CHAT,
 )
 
 register_voice(

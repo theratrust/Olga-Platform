@@ -22,6 +22,7 @@ def register_chat(
     get_recent_history,
     create_pending_draft,
     clear_chat_history,
+    direct_chat: bool = False,
 ):
 
     @dp.message(Command("new"))
@@ -112,68 +113,85 @@ def register_chat(
 
             ai_draft = response.choices[0].message.content
 
-            draft_id = await create_pending_draft(
-                user_id,
-                full_name,
-                user_text,
-                ai_draft,
-            )
+            if direct_chat:
+                await bot.send_message(user_id, ai_draft)
 
-            logging.info(
-                f"Draft {draft_id} created for user {user_id}"
-            )
+                await add_chat_message(
+                    user_id,
+                    full_name,
+                    username,
+                    "assistant",
+                    ai_draft,
+                )
 
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="✅ Одобрить",
-                            callback_data=f"approve_{draft_id}",
-                        ),
-                        InlineKeyboardButton(
-                            text="✏️ Изменить",
-                            callback_data=f"edit_{draft_id}",
-                        ),
-                        InlineKeyboardButton(
-                            text="❌ Отклонить",
-                            callback_data=f"reject_{draft_id}",
-                        ),
+                logging.info(
+                    "Direct chat response sent to user %s",
+                    user_id,
+                )
+
+            else:
+                draft_id = await create_pending_draft(
+                    user_id,
+                    full_name,
+                    user_text,
+                    ai_draft,
+                )
+
+                logging.info(
+                    f"Draft {draft_id} created for user {user_id}"
+                )
+
+                kb = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Одобрить",
+                                callback_data=f"approve_{draft_id}",
+                            ),
+                            InlineKeyboardButton(
+                                text="✏️ Изменить",
+                                callback_data=f"edit_{draft_id}",
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Отклонить",
+                                callback_data=f"reject_{draft_id}",
+                            ),
+                        ]
                     ]
-                ]
-            )
+                )
 
-            mod_text = (
-                "📩 Новый вопрос от пользователя: "
-                f"{full_name} ({username})\n"
-                f"«{user_text}»\n\n"
-                f"🤖 Черновик от {model_name} "
-                f"({archetype}):\n"
-                f"{ai_draft}"
-            )
+                mod_text = (
+                    "📩 Новый вопрос от пользователя: "
+                    f"{full_name} ({username})\n"
+                    f"«{user_text}»\n\n"
+                    f"🤖 Черновик от {model_name} "
+                    f"({archetype}):\n"
+                    f"{ai_draft}"
+                )
 
-            for admin_id in admin_ids:
-                try:
-                    chunks = split_long_text(mod_text)
+                for admin_id in admin_ids:
+                    try:
+                        chunks = split_long_text(mod_text)
 
-                    for index, chunk in enumerate(chunks):
-                        is_last_chunk = index == len(chunks) - 1
+                        for index, chunk in enumerate(chunks):
+                            is_last_chunk = index == len(chunks) - 1
 
-                        await bot.send_message(
-                            admin_id,
-                            chunk,
-                            reply_markup=kb if is_last_chunk else None,
+                            await bot.send_message(
+                                admin_id,
+                                chunk,
+                                reply_markup=kb if is_last_chunk else None,
+                            )
+
+                        logging.info(
+                            f"Draft {draft_id} sent to admin "
+                            f"{admin_id}"
                         )
 
-                    logging.info(
-                        f"Draft {draft_id} sent to admin "
-                        f"{admin_id}"
-                    )
-
-                except Exception as exc:
-                    logging.error(
-                        f"Failed to send draft {draft_id} "
-                        f"to admin {admin_id}: {exc}"
-                    )
+                    except Exception as exc:
+                        logging.error(
+                            f"Failed to send draft {draft_id} "
+                            f"to admin {admin_id}: {exc}"
+                        )
 
         except Exception as exc:
             logging.exception(
