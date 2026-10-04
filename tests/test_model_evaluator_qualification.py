@@ -898,10 +898,10 @@ def test_structural_retry_recovers_and_preserves_attempts(failure):
     assert row["final_selected_result"] == validate_case(case)
     assert row["latency_seconds"] == sum(row[key]["latency_seconds"] for key in ("first_attempt", "retry_attempt"))
     repair = model.calls[1][-1]["content"]
-    assert "Предыдущий ответ не прошёл техническую проверку формата." in repair
+    assert "Предыдущий ответ не прошёл техническую проверку контракта." in repair
     assert "Не используй Markdown-блоки." in repair
     if failure == "structure":
-        assert "Нарушен набор обязательных" in repair
+        assert "missing required fields: scores" in repair
     metrics = report["metrics"]
     assert metrics["first_pass_contract_valid_cases"] == 0
     assert metrics["first_pass_contract_valid_rate"] == 0
@@ -982,7 +982,8 @@ def test_retry_prompt_has_no_gold_and_no_prior_output():
     assert "UNTRUSTED_PRIOR_OUTPUT" not in encoded
     # Retry addition consists solely of the format instruction and a static schema diagnostic.
     assert "expected" not in model.calls[1][-1]["content"]
-    assert "hard_fail" not in model.calls[1][-1]["content"]
+    # Contract field names are allowed; no gold values are supplied.
+    assert '"hard_fail":' not in model.calls[1][-1]["content"]
     assert "HF01" not in model.calls[1][-1]["content"]
 
 
@@ -1052,3 +1053,148 @@ def test_retry_can_be_disabled_explicitly():
     assert len(model.calls) == report["cases"][0]["attempt_count"] == 1
     assert report["metadata"]["max_attempts"] == 1
     assert report["metrics"]["retry_attempted_cases"] == 0
+
+
+def diagnostic_output(kind):
+    case = BY_ID["advice_fail"] if kind in ("inclusion", "excerpt", "unknown_hf") else BY_ID["advice_pass"]
+    result = copy.deepcopy(case["expected"])
+    if kind == "heading":
+        result["source_refs"][0]["section"] = "Несуществующий заголовок"
+    elif kind == "yo_heading":
+        result["source_refs"][0].update(path="knowledge/method/принципы.md",
+            section="Не заполнять неопределенность своими вариантами")
+    elif kind == "null_score":
+        result["scores"]["grounding"] = None
+    elif kind == "missing":
+        del result["scores"]
+    elif kind == "nested_missing":
+        del result["insufficient_context"]["items"]
+    elif kind == "unknown":
+        result["extra_field"] = "synthetic"
+    elif kind == "inclusion":
+        result["source_refs"] = copy.deepcopy(BY_ID["unknown_space"]["expected"]["source_refs"])
+    elif kind == "priority":
+        result["decision"] = "retry"
+    elif kind == "excerpt":
+        result["violations"][0]["excerpt"] = "ABSENT_EXCERPT"
+    elif kind == "unknown_hf":
+        result["violations"][0]["rule_id"] = "HF99"
+    elif kind == "missing_path":
+        result["source_refs"][0]["path"] = "knowledge/method/nonexistent-synthetic.md"
+    elif kind == "format_path":
+        result["source_refs"][0]["path"] = "knowledge//method/метод_Ольги.md"
+    elif kind == "traversal":
+        result["source_refs"][0]["path"] = "knowledge/method/../метод_Ольги.md"
+    elif kind == "absolute":
+        result["source_refs"][0]["path"] = "/opt/olga-coaching-dev/knowledge/method/метод_Ольги.md"
+    elif kind == "nul":
+        result["source_refs"][0]["path"] = "knowledge/method/\x00.md"
+    elif kind == "shape":
+        result["scores"] = []
+    return case, result
+
+
+@pytest.mark.parametrize("variant,classification,eligible", [
+    ("heading", "invalid_source_heading", True),
+    ("yo_heading", "invalid_source_heading", True),
+    ("null_score", "null_score_without_context", True),
+    ("missing", "missing_required_field", True),
+    ("nested_missing", "missing_required_field", True),
+    ("unknown", "unknown_field", True),
+    ("inclusion", "source_reference_inclusion_error", True),
+    ("missing_path", "invalid_source_path", True),
+    ("format_path", "invalid_source_path", True),
+    ("shape", "schema_shape_error", True),
+    ("priority", "decision_priority_error", False),
+    ("excerpt", "excerpt_evidence_error", False),
+    ("unknown_hf", "other_contract_error", False),
+    ("traversal", "invalid_source_path", False),
+    ("absolute", "invalid_source_path", False),
+    ("nul", "invalid_source_path", False),
+])
+def test_classified_contract_errors_control_retry(variant, classification, eligible):
+    case, invalid = diagnostic_output(variant)
+    model = FakeModel([json.dumps(invalid), json.dumps(case["expected"])])
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    error = row["first_attempt"]["error"]
+    assert error["contract_error_kind"] == classification
+    assert error["contract_error"] and error["kind"] == "contract_invalid_result"
+    assert error["structural_retry_eligible"] is eligible
+    assert row["attempt_count"] == len(model.calls) == (2 if eligible else 1)
+    assert row["recovered"] is eligible
+    assert report["metrics"]["first_pass_contract_valid_cases"] == 0
+    assert report["metrics"]["first_pass_infrastructure_failures"] == 1
+    assert report["metrics"]["final_contract_valid_cases"] == int(eligible)
+    assert report["metrics"]["exact_full_result_match_rate"] == int(eligible)
+    if eligible:
+        assert error["contract_error"] in model.calls[1][-1]["content"]
+        assert row["first_attempt"]["parsed_result"] == invalid
+        assert row["retry_attempt"]["validated_result"] == validate_case(case)
+    else:
+        assert row["retry_attempt"] is None
+    if variant == "yo_heading":
+        assert row["first_attempt"]["parsed_result"]["source_refs"][0]["section"] == "Не заполнять неопределенность своими вариантами"
+
+
+def test_contract_diagnostics_never_expose_raw_exception_secrets():
+    from services.evaluation.qualification import contract_diagnostic
+    secret = "PRIVATE_SYNTHETIC_KEY"
+    raw = "source_refs: source path validation failed: Authorization: Bearer " + secret + "\nENV_PRIVATE=" + secret
+    diagnostic = contract_diagnostic(ContractError(raw), BY_ID["advice_pass"]["expected"], secret)
+    assert diagnostic["contract_error_kind"] == "invalid_source_path"
+    assert diagnostic["structural_retry_eligible"] is False
+    encoded = json.dumps(diagnostic)
+    assert secret not in encoded and "Authorization" not in encoded and "ENV_PRIVATE" not in encoded
+    assert contract_diagnostic(ContractError(secret), {}, secret)["contract_error_kind"] == "other_contract_error"
+
+
+def test_heading_retry_diagnostic_has_no_gold_or_supplied_heading():
+    case, invalid = diagnostic_output("heading")
+    case = copy.deepcopy(case)
+    case["expected"]["reason"] = "GOLD_DIAGNOSTIC_SENTINEL"
+    invalid["source_refs"][0]["section"] = "Authorization: Bearer PRIVATE_SYNTHETIC_KEY"
+    model = FakeModel([json.dumps(invalid), json.dumps(case["expected"])])
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True, secret="PRIVATE_SYNTHETIC_KEY")
+    repair = model.calls[1][-1]["content"]
+    assert "source_refs[0].section: heading not found" in repair
+    assert "Ошибка:" in repair and "Исправь только формат и структуру." in repair
+    assert "GOLD_DIAGNOSTIC_SENTINEL" not in json.dumps(model.calls)
+    assert "PRIVATE_SYNTHETIC_KEY" not in json.dumps(report) + json.dumps(model.calls)
+    assert "Authorization" not in repair
+
+
+def test_repairable_contract_failure_is_still_bounded_to_two_attempts():
+    case, invalid = diagnostic_output("heading")
+    model = FakeModel([json.dumps(invalid), json.dumps(invalid), json.dumps(case["expected"])])
+    report = qualify_with_retry([case], EvaluatorPromptBuilder(), model, CONFIG, live=True)
+    row = report["cases"][0]
+    assert len(model.calls) == row["attempt_count"] == 2
+    assert row["outcome"] == "INFRA_FAIL" and not row["recovered"]
+    for key in ("first_attempt", "retry_attempt"):
+        assert row[key]["error"]["contract_error_kind"] == "invalid_source_heading"
+
+
+def test_null_score_rule_remains_strict_even_with_empty_context_items():
+    from services.evaluation.contract import validate_result
+    result = copy.deepcopy(BY_ID["advice_pass"]["expected"])
+    result["scores"]["grounding"] = None
+    with pytest.raises(ContractError, match="null scores require insufficient context"):
+        validate_result(result, BY_ID["advice_pass"]["input"]["candidate_response"])
+    result["insufficient_context"]["present"] = True
+    with pytest.raises(ContractError, match="flag must match presence of items"):
+        validate_result(result, BY_ID["advice_pass"]["input"]["candidate_response"])
+
+
+@pytest.mark.parametrize("message", [
+    "source_refs[0].path: escapes method directory",
+    "method directory escapes project root",
+    "source_refs: source path validation failed: permission denied",
+    "source_refs[0]: cannot read source: permission denied",
+])
+def test_path_containment_and_filesystem_failures_are_not_repairable(message):
+    from services.evaluation.qualification import contract_diagnostic
+    diagnostic = contract_diagnostic(ContractError(message), BY_ID["advice_pass"]["expected"])
+    assert diagnostic["contract_error_kind"] == "invalid_source_path"
+    assert diagnostic["structural_retry_eligible"] is False
+    assert "permission denied" not in diagnostic["contract_error"]

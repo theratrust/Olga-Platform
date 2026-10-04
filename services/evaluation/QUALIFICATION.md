@@ -148,8 +148,8 @@ per case). --no-structural-retry disables recovery for a first-pass-only run.
 Eligible failures are truncated_response, empty_response, malformed_model_json,
 and contract-invalid structural/schema errors recognized by a conservative
 allowlist of shape, required/unknown fields, types, nonempty values and enums.
-Evidence-reference/excerpt failures and decision-priority inconsistencies are not
-eligible. Transport, timeout, HTTP and provider errors have no added retry policy.
+Excerpt failures, unsafe paths and decision-priority inconsistencies are not
+eligible. Reference eligibility is refined below in report version 1.4. Transport, timeout, HTTP and provider errors have no added retry policy.
 Valid judgments, semantic mismatch and detail variance are never retry triggers.
 
 Retry sends the original evaluator prompt and synthetic input plus a Russian
@@ -174,3 +174,34 @@ validity, regardless of semantic agreement. Existing agreement/HF/full-result
 metrics use final selected results, keep their case denominators and exclusions,
 and do not count retries as additional corpus cases. First-attempt failures remain
 visible even after recovery. Dry-run remains network-free and writes no artifacts.
+
+
+## Safe contract diagnostics and deterministic repair (report version 1.4)
+
+Every candidate-result ContractError records contract_error_kind and contract_error,
+plus structural_retry_eligible. Diagnostics retain trusted field locations and fixed
+safe descriptions, never raw filesystem exception text, supplied field values,
+headers, environment data or derived expected decisions. Active-key redaction still
+applies to both attempts and final artifacts. Unknown failures use other_contract_error.
+
+The classifications are schema_shape_error, invalid_source_path,
+invalid_source_heading, source_reference_inclusion_error, null_score_without_context,
+missing_required_field, unknown_field, decision_priority_error,
+excerpt_evidence_error and other_contract_error.
+
+One retry is allowed for schema shape, exact source heading, source-reference
+inclusion, null-score/context, missing-field and unknown-field errors. A source path
+is retryable only for canonical spelling/reference-generation errors or missing
+files with lexically contained knowledge/method/ paths. Absolute paths, traversal,
+NUL, backslashes, symlink containment failures, filesystem/permission failures and
+unknown path errors are not retryable. Unknown HF identifiers, excerpt errors and
+decision-priority errors do not trigger repair. The original output failure allowlist
+(truncated_response, malformed_model_json, empty_response) remains unchanged;
+transport/provider errors and valid semantic differences never trigger retries.
+
+The Russian repair prompt contains only the original evaluator input and the safe
+technical diagnostic, without gold results. Source headings, е/ё and provenance
+are never normalized or repaired by the harness; the model must return valid exact
+references. The canonical validator is unchanged: null scores require present=true
+and missing context items. Both attempts, first-pass reliability, final semantic
+metrics and the maximum of two attempts remain as documented above.
