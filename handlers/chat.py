@@ -23,6 +23,7 @@ def register_chat(
     create_pending_draft,
     clear_chat_history,
     direct_chat: bool = False,
+    shadow_observer=None,
 ):
 
     @dp.message(Command("new"))
@@ -192,6 +193,14 @@ def register_chat(
                             f"Failed to send draft {draft_id} "
                             f"to admin {admin_id}: {exc}"
                         )
+
+            # Observation is scheduled only after the existing delivery path completes.
+            # It never awaits an evaluator or changes the candidate/route.
+            if shadow_observer is not None:
+                try:
+                    shadow_observer(history, user_text, ai_draft, session_id=user_id)
+                except Exception:
+                    logging.error("SHADOW_EVAL_FAIL post_delivery_hook_error")
 
         except Exception as exc:
             logging.exception(

@@ -27,6 +27,7 @@ from handlers.knowledge_view import register_knowledge_view
 from handlers.method_drafts import register_method_drafts
 from handlers.method_assets import register_method_assets
 from services.methods.loader import load_shadow_light_version
+from services.evaluation.runtime import ShadowDispatcher
 
 load_dotenv()
 
@@ -151,6 +152,8 @@ register_method_assets(
     admin_ids=ADMIN_IDS,
 )
 
+shadow_dispatcher = ShadowDispatcher()
+
 ai_chat_handler = register_chat(
     dp=dp,
     bot=bot,
@@ -165,6 +168,7 @@ ai_chat_handler = register_chat(
     create_pending_draft=create_pending_draft,
     clear_chat_history=clear_chat_history,
     direct_chat=DEV_DIRECT_CHAT,
+    shadow_observer=shadow_dispatcher.submit,
 )
 
 register_voice(
@@ -184,7 +188,10 @@ async def main():
     await init_db()
     logging.basicConfig(level=logging.INFO)
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await shadow_dispatcher.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
