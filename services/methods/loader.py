@@ -1,8 +1,10 @@
 import json
 import os
+from pathlib import Path
 
 
-BASE_PATH = "/app/knowledge/method"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BASE_PATH = PROJECT_ROOT / "knowledge" / "method"
 
 METHOD_CORE_FILES = [
     "метод_Ольги.md",
@@ -14,21 +16,17 @@ METHOD_CORE_FILES = [
 
 
 def load_shadow_light_version(version: str):
-    path = os.path.join(
-        BASE_PATH,
-        "shadow_light",
-        version,
-    )
+    path = BASE_PATH / "shadow_light" / version
 
     with open(
-        os.path.join(path, "questions.json"),
+        path / "questions.json",
         "r",
         encoding="utf-8",
     ) as f:
         questions = json.load(f)
 
     with open(
-        os.path.join(path, "metadata.json"),
+        path / "metadata.json",
         "r",
         encoding="utf-8",
     ) as f:
@@ -44,9 +42,9 @@ def load_method_core() -> str:
     sections = []
 
     for filename in METHOD_CORE_FILES:
-        path = os.path.join(BASE_PATH, filename)
+        path = BASE_PATH / filename
 
-        if not os.path.isfile(path):
+        if not path.is_file():
             raise FileNotFoundError(
                 f"Method core file is missing: {path}"
             )
