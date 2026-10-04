@@ -11,7 +11,8 @@ from openai import AsyncOpenAI
 
 from database import (
     init_db, add_chat_message, get_recent_history,
-    create_pending_draft, get_pending_draft, update_draft_status
+    create_pending_draft, get_pending_draft, update_draft_status,
+    clear_chat_history,
 )
 
 from handlers.start import register_start
@@ -157,6 +158,7 @@ ai_chat_handler = register_chat(
     add_chat_message=add_chat_message,
     get_recent_history=get_recent_history,
     create_pending_draft=create_pending_draft,
+    clear_chat_history=clear_chat_history,
 )
 
 register_voice(

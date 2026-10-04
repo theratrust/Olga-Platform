@@ -1,6 +1,7 @@
 import logging
 
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -20,7 +21,23 @@ def register_chat(
     add_chat_message,
     get_recent_history,
     create_pending_draft,
+    clear_chat_history,
 ):
+
+    @dp.message(Command("new"))
+    async def cmd_new(
+        message: types.Message,
+        state: FSMContext,
+    ):
+        user_id = message.from_user.id
+
+        await clear_chat_history(user_id)
+        await state.set_state(state_cls.AI_CHAT)
+
+        await message.answer(
+            "Начинаем новый разговор. Предыдущая история очищена.\n\n"
+            "Напиши, что сейчас для тебя важно."
+        )
 
     async def ai_chat_handler(
         message: types.Message,
@@ -87,7 +104,11 @@ def register_chat(
                     "X-Title": "Olga Coaching Bot",
                 },
             )
-            logging.info("OpenRouter raw response: %s", response)
+            logging.info(
+                "OpenRouter response received for user %s via model %s",
+                user_id,
+                model_name,
+            )
 
             ai_draft = response.choices[0].message.content
 

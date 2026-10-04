@@ -183,6 +183,18 @@ async def get_recent_history(user_id: int, limit: int = 10):
         ]
 
 
+async def clear_chat_history(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            DELETE FROM chat_messages
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        await db.commit()
+
+
 # --------------------------------------------------------------------
 # Pending drafts
 # --------------------------------------------------------------------
