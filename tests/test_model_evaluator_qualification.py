@@ -340,7 +340,8 @@ def test_http_200_provider_error_never_reaches_evaluator(monkeypatch, payload):
     monkeypatch.setattr(q, "validate_result", forbidden)
     report = qualify(CASES[:1], EvaluatorPromptBuilder(), adapter, CONFIG, live=True, secret="SYNTHETIC_KEY")
     record = report["cases"][0]
-    assert record["outcome"] == "provider_error"
+    assert record["outcome"] == "INFRA_FAIL"
+    assert record["error"]["kind"] == "provider_error"
     assert record["error"]["details"]["http_status"] == 200
     assert record["parsed_result"] is None and record["comparison"] is None
     assert not record["contract_valid"]
@@ -376,8 +377,9 @@ def test_first_transport_provider_failure_second_case_continues(kind):
     adapter = FakeModel([AdapterError(kind), json.dumps(selected[1]["expected"])])
     report = qualify(selected, EvaluatorPromptBuilder(), adapter, CONFIG, live=True)
     assert [row["case_id"] for row in report["cases"]] == [c["id"] for c in selected]
-    assert report["cases"][0]["outcome"] == kind
-    assert report["cases"][1]["outcome"] == "match"
+    assert report["cases"][0]["outcome"] == "INFRA_FAIL"
+    assert report["cases"][0]["error"]["kind"] == kind
+    assert report["cases"][1]["outcome"] == "EXACT_MATCH"
     assert len(adapter.calls) == 2
 
 
@@ -557,3 +559,268 @@ def test_error_message_sanitized_before_truncation():
     assert secret not in exc.details["message"]
     assert "LONG_" not in exc.details["message"]
     assert len(exc.details["message"]) <= 2000
+
+
+@pytest.mark.parametrize("content", [None, "", " \t\n"])
+@pytest.mark.parametrize("reasoning_present", [False, True])
+def test_length_empty_content_is_truncated(monkeypatch, content, reasoning_present):
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    message = {"content": content}
+    if reasoning_present:
+        message["reasoning"] = "PRIVATE_REASONING_MARKER"
+        message["reasoning_details"] = [{"text": "PRIVATE_REASONING_MARKER"}]
+    payload = {"provider": "synthetic-provider", "choices": [{"finish_reason": "length",
+        "native_finish_reason": "max_output_tokens", "message": message}]}
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    with pytest.raises(AdapterError) as caught:
+        adapter.complete([], live=True)
+    exc = caught.value
+    assert exc.kind == "truncated_response"
+    assert exc.details["http_status"] == 200
+    assert exc.details["finish_reason"] == "length"
+    assert exc.details["native_finish_reason"] == "max_output_tokens"
+    assert exc.details["reasoning_present"] is reasoning_present
+    assert exc.details["provider"] == "synthetic-provider"
+    assert exc.details["model"] == CONFIG.model
+    assert exc.details["backend_host"] == "127.0.0.1"
+    assert "PRIVATE_REASONING_MARKER" not in str(exc) + exc.raw_response + json.dumps(exc.details)
+
+
+@pytest.mark.parametrize("finish_reason", [None, "stop"])
+def test_reasoning_alone_is_empty_without_length_and_never_parsed(monkeypatch, finish_reason):
+    from services.evaluation import qualification as q
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    payload = {"choices": [{"finish_reason": finish_reason,
+               "message": {"content": None, "reasoning": json.dumps(CASES[0]["expected"]),
+                           "reasoning_content": "PRIVATE_REASONING_MARKER"}}]}
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Reasoning alone must never enter evaluator parsing")
+    monkeypatch.setattr(q, "parse_model_json", forbidden)
+    monkeypatch.setattr(q, "validate_result", forbidden)
+    report = qualify(CASES[:1], EvaluatorPromptBuilder(), adapter, CONFIG, live=True)
+    row = report["cases"][0]
+    assert row["outcome"] == "INFRA_FAIL"
+    assert row["error"]["kind"] == "empty_response"
+    assert row["parsed_result"] is None and row["raw_model_output"] is None
+    assert row["response_metadata"]["reasoning_present"] is True
+    assert "PRIVATE_REASONING_MARKER" not in json.dumps(report)
+    assert not row["contract_valid"]
+
+
+def test_truncation_never_parses_reasoning_and_later_case_continues(monkeypatch):
+    from services.evaluation import qualification as q
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    payloads = iter([
+        {"choices": [{"finish_reason": "length", "native_finish_reason": "length",
+          "message": {"content": None, "reasoning": "PRIVATE_REASONING_MARKER"}}]},
+        {"choices": [{"finish_reason": "stop", "message": {
+          "content": json.dumps(CASES[1]["expected"]), "reasoning": "PRIVATE_REASONING_MARKER"}}]},
+    ])
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(next(payloads)).encode()))
+    inputs = []
+    original = q.parse_model_json
+    def spy(raw):
+        inputs.append(raw)
+        return original(raw)
+    monkeypatch.setattr(q, "parse_model_json", spy)
+    report = qualify(CASES[:2], EvaluatorPromptBuilder(), adapter, CONFIG, live=True)
+    assert len(inputs) == 1 and "PRIVATE_REASONING_MARKER" not in inputs[0]
+    assert report["cases"][0]["outcome"] == "INFRA_FAIL"
+    assert report["cases"][0]["error"]["kind"] == "truncated_response"
+    assert report["cases"][1]["outcome"] == "EXACT_MATCH"
+    assert report["cases"][0]["latency_seconds"] >= 0
+    assert "PRIVATE_REASONING_MARKER" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning", "reasoning_content", "reasoning_details"])
+def test_content_only_parsed_with_reasoning_fields_removed(monkeypatch, reasoning_key):
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    content = json.dumps(CASES[0]["expected"])
+    payload = {"choices": [{"finish_reason": "length", "message": {
+        "content": content, reasoning_key: "PRIVATE_REASONING_MARKER"}}]}
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    reply = adapter.complete([], live=True)
+    assert reply.text == content
+    assert reply.details["reasoning_present"] is True
+    assert "PRIVATE_REASONING_MARKER" not in reply.raw_response
+    assert reasoning_key not in json.loads(reply.raw_response)["choices"][0]["message"]
+    assert parse_model_json(reply.text) == CASES[0]["expected"]
+
+
+@pytest.mark.parametrize("options,expected", [
+    ({}, {"temperature": 0, "max_tokens": 2500}),
+    ({"max_tokens": None}, {"temperature": 0}),
+    ({"max_tokens": 1000, "reasoning": {"effort": "low"}},
+     {"temperature": 0, "max_tokens": 1000, "reasoning": {"effort": "low"}}),
+    ({"reasoning": {"max_tokens": 512}},
+     {"temperature": 0, "max_tokens": 2500, "reasoning": {"max_tokens": 512}}),
+    ({"reasoning_effort": "low"},
+     {"temperature": 0, "max_tokens": 2500, "reasoning_effort": "low"}),
+])
+def test_generation_parameters_only_when_configured(monkeypatch, options, expected):
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    cfg = ModelConfig(CONFIG.model, CONFIG.base_url, api_key_env=CONFIG.api_key_env, **options)
+    sent = []
+    raw = json.dumps({"choices": [{"message": {"content": "{}"}}]})
+    def transport(req, **kwargs):
+        sent.append(json.loads(req.data))
+        return io.BytesIO(raw.encode())
+    adapter = OpenAICompatibleAdapter(cfg, transport)
+    adapter.complete([], live=True)
+    controls = {key: value for key, value in sent[0].items() if key not in {"model", "messages"}}
+    assert controls == expected
+    assert cfg.generation_parameters() == expected
+
+
+@pytest.mark.parametrize("options", [
+    {"max_tokens": 0}, {"max_tokens": True}, {"max_tokens": 1.5},
+    {"reasoning": {}}, {"reasoning": []}, {"reasoning": {"max_tokens": -1}},
+    {"reasoning": {"effort": "low"}, "reasoning_effort": "low"},
+    {"reasoning_effort": "unsupported"}, {"reasoning_effort": {}},
+    {"reasoning": {"budget": float("nan")}},
+])
+def test_invalid_generation_configuration(options):
+    with pytest.raises(AdapterError, match="invalid_generation_config"):
+        ModelConfig(CONFIG.model, CONFIG.base_url, **options).validate()
+
+
+@pytest.mark.parametrize("flags,expected", [
+    (["--max-output-tokens", "1200"], {"temperature": 0, "max_tokens": 1200}),
+    (["--reasoning-effort", "low"], {"temperature": 0, "max_tokens": 2500, "reasoning": {"effort": "low"}}),
+    (["--reasoning-effort", "low", "--reasoning-format", "reasoning_effort"],
+     {"temperature": 0, "max_tokens": 2500, "reasoning_effort": "low"}),
+    (["--reasoning-budget", "256"], {"temperature": 0, "max_tokens": 2500, "reasoning": {"max_tokens": 256}}),
+    (["--reasoning-json", '{"effort":"low","max_tokens":512}'],
+     {"temperature": 0, "max_tokens": 2500, "reasoning": {"effort": "low", "max_tokens": 512}}),
+])
+def test_cli_controls_reach_adapter_configuration_with_mock_only(monkeypatch, flags, expected):
+    module = runner()
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    configs = []
+    def factory(config):
+        configs.append(config)
+        return FakeModel([json.dumps(CASES[0]["expected"])])
+    monkeypatch.setattr(module, "OpenAICompatibleAdapter", factory)
+    reports = []
+    def save(report, **kwargs):
+        reports.append(report)
+        return PROJECT_ROOT / "artifacts/evaluation/mocked.json"
+    monkeypatch.setattr(module, "write_report", save)
+    assert module.main(["--live", "--model", CONFIG.model, "--base-url", CONFIG.base_url,
+                        "--api-key-env", CONFIG.api_key_env, "--max-cases", "1"] + flags) == 0
+    assert configs[0].generation_parameters() == expected
+    assert reports[0]["metadata"]["max_tokens"] == expected["max_tokens"]
+    assert reports[0]["metadata"]["reasoning_config"] == expected.get("reasoning")
+    assert reports[0]["metadata"]["reasoning_effort_config"] == expected.get("reasoning_effort")
+
+
+def test_reasoning_dry_run_no_adapter(monkeypatch, capsys):
+    module = runner()
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Dry run must never dispatch")
+    monkeypatch.setattr(module, "OpenAICompatibleAdapter", forbidden)
+    monkeypatch.setattr(module, "write_report", forbidden)
+    assert module.main(["--dry-run", "--model", CONFIG.model, "--base-url", CONFIG.base_url,
+                        "--reasoning-effort", "low"]) == 0
+    output = capsys.readouterr().out
+    assert "max_tokens=2500" in output and "low" in output
+
+
+def test_provider_errors_still_take_priority_over_truncation(monkeypatch):
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    payload = {"error": {"code": "failed", "message": "Authorization: Bearer SYNTHETIC_KEY"},
+               "choices": [{"finish_reason": "length", "message": {"content": None,
+                   "reasoning": "PRIVATE_REASONING_MARKER"}}]}
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    with pytest.raises(AdapterError) as caught:
+        adapter.complete([], live=True)
+    assert caught.value.kind == "provider_error"
+    assert "SYNTHETIC_KEY" not in caught.value.raw_response
+    assert "PRIVATE_REASONING_MARKER" not in caught.value.raw_response
+
+
+def test_missing_content_reasoning_field_alone_never_enters_parser(monkeypatch):
+    from services.evaluation import qualification as q
+    monkeypatch.setenv(CONFIG.api_key_env, "SYNTHETIC_KEY")
+    payload = {"choices": [{"message": {"reasoning": "PRIVATE_REASONING_MARKER"}}]}
+    adapter = OpenAICompatibleAdapter(CONFIG, lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Missing content must not fall back to reasoning")
+    monkeypatch.setattr(q, "parse_model_json", forbidden)
+    report = qualify(CASES[:1], EvaluatorPromptBuilder(), adapter, CONFIG, live=True)
+    assert report["cases"][0]["parsed_result"] is None
+    assert report["cases"][0]["outcome"] == "INFRA_FAIL"
+    assert report["cases"][0]["error"]["kind"] == "response_format_error"
+    assert "PRIVATE_REASONING_MARKER" not in json.dumps(report)
+
+
+def test_generation_parameters_do_not_mutate_config():
+    options = {"effort": "low", "max_tokens": 512}
+    snapshot = copy.deepcopy(options)
+    cfg = ModelConfig(CONFIG.model, CONFIG.base_url, reasoning=options)
+    parameters = cfg.generation_parameters()
+    parameters["reasoning"]["max_tokens"] = 1
+    assert options == snapshot and cfg.reasoning == snapshot
+
+
+def four_outcome_report():
+    case = BY_ID["advice_pass"]
+    detail_variance = copy.deepcopy(case["expected"])
+    detail_variance["reason"] = "Корректный ответ сохраняет авторство клиента."
+    return qualify([case, case, BY_ID["advice_fail"], case], EvaluatorPromptBuilder(),
+                   FakeModel([json.dumps(case["expected"]), json.dumps(detail_variance),
+                              json.dumps(case["expected"]), AdapterError("timeout")]),
+                   CONFIG, live=True)
+
+
+def test_four_qualification_outcomes_and_counts():
+    report = four_outcome_report()
+    assert [row["outcome"] for row in report["cases"]] == [
+        "EXACT_MATCH", "SEMANTIC_PASS_DETAIL_VARIANCE", "SEMANTIC_MISMATCH", "INFRA_FAIL"]
+    detail = report["cases"][1]
+    assert detail["contract_valid"] and detail["error"] is None
+    assert detail["comparison"]["different_result_fields"] == ["reason"]
+    metrics = report["metrics"]
+    for key in ("infrastructure_failures", "semantic_label_mismatches",
+                "semantic_pass_detail_variance", "exact_matches"):
+        assert metrics[key] == 1
+    assert metrics["semantic_label_mismatch_cases"] == 1
+    assert metrics["exact_full_result_match_rate"] == 1 / 4
+    assert metrics["hard_fail_agreement"] == 2 / 4
+    assert metrics["hf_metric_cases"] == 3
+
+
+def test_console_separates_four_outcomes(monkeypatch, capsys):
+    cli = runner()
+    report = four_outcome_report()
+    monkeypatch.setenv("OLGA_TEST_API_KEY", "synthetic-test-credential")
+    monkeypatch.setattr(cli, "qualify", lambda *args, **kwargs: report)
+    monkeypatch.setattr(cli, "OpenAICompatibleAdapter", lambda *args: FakeModel([]))
+    monkeypatch.setattr(cli, "write_report", lambda *args, **kwargs:
+                        PROJECT_ROOT / "artifacts/evaluation/mock-report.json")
+    assert cli.main(["--model", "test-model", "--base-url", CONFIG.base_url,
+                     "--api-key-env", "OLGA_TEST_API_KEY", "--max-cases", "4", "--live"]) == 1
+    output = capsys.readouterr().out
+    for outcome in ("EXACT_MATCH", "SEMANTIC_PASS_DETAIL_VARIANCE", "SEMANTIC_MISMATCH", "INFRA_FAIL"):
+        assert outcome + " " in output
+    for key in ("infrastructure_failures", "semantic_label_mismatches",
+                "semantic_pass_detail_variance", "exact_matches"):
+        assert key + "=1" in output
+
+
+@pytest.mark.parametrize("label", ["hard_fail", "overall", "decision", "hf_rules", "insufficient_context"])
+def test_each_semantic_label_difference_is_mismatch(label):
+    from services.evaluation.metrics import qualification_outcome
+    comparison = {"matches": {key: True for key in
+                  ("hard_fail", "overall", "decision", "hf_rules", "insufficient_context", "full_result")}}
+    comparison["matches"][label] = False
+    comparison["matches"]["full_result"] = False
+    assert qualification_outcome(True, comparison) == "SEMANTIC_MISMATCH"
+
+
+def test_zero_attempts_outcome_counts():
+    metrics = calculate_metrics([], 0)
+    for key in ("infrastructure_failures", "semantic_label_mismatches",
+                "semantic_pass_detail_variance", "exact_matches"):
+        assert metrics[key] == 0

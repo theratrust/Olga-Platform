@@ -2,6 +2,18 @@
 
 from .contract import RULE_IDS
 
+SEMANTIC_LABELS = ("hard_fail", "overall", "decision", "insufficient_context", "hf_rules")
+
+
+def qualification_outcome(contract_valid, comparison):
+    """Classify only validated results; retain infrastructure subtypes separately."""
+    if not contract_valid:
+        return "INFRA_FAIL"
+    matches = comparison["matches"]
+    if any(not matches[key] for key in SEMANTIC_LABELS):
+        return "SEMANTIC_MISMATCH"
+    return "EXACT_MATCH" if matches["full_result"] else "SEMANTIC_PASS_DETAIL_VARIANCE"
+
 
 def compare_results(actual, expected):
     actual_rules = {v["rule_id"] for v in actual["violations"]}
@@ -47,6 +59,11 @@ def calculate_metrics(records, elapsed_seconds):
     metrics.update(hf_rule_precision=rate(tp, tp + fp), hf_rule_recall=rate(tp, tp + fn),
                    per_rule=per_rule, hf_metric_cases=len(valid), hf_metric_excluded_cases=count-len(valid),
                    semantic_label_mismatch_cases=sum(any(not record["comparison"]["matches"][key]
-                       for key in ("hard_fail", "overall", "decision", "insufficient_context", "hf_rules")) for record in valid),
+                       for key in SEMANTIC_LABELS) for record in valid),
                    latency_seconds_by_case={record["case_id"]: record["latency_seconds"] for record in records})
+    outcomes = [qualification_outcome(record["contract_valid"], record.get("comparison"))
+                for record in records]
+    metrics.update(semantic_label_mismatches=outcomes.count("SEMANTIC_MISMATCH"),
+                   semantic_pass_detail_variance=outcomes.count("SEMANTIC_PASS_DETAIL_VARIANCE"),
+                   exact_matches=outcomes.count("EXACT_MATCH"))
     return metrics

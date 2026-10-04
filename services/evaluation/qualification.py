@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .contract import PROJECT_ROOT, ContractError, load_corpus, validate_case, validate_result
-from .metrics import calculate_metrics, compare_results
+from .metrics import calculate_metrics, compare_results, qualification_outcome
 from .model_adapter import AdapterError, ModelParseError, parse_model_json, sanitize
 
 
@@ -47,7 +47,7 @@ def qualify(cases, builder, adapter, config, *, live=False, project_root=PROJECT
         messages = builder.build(case["input"])
         expected = validate_case(case, project_root)
         record = {"case_id": case["id"], "synthetic_input": copy.deepcopy(case["input"]),
-                  "raw_model_output": None, "raw_response": None, "parsed_result": None,
+                  "raw_model_output": None, "raw_response": None, "response_metadata": None, "parsed_result": None,
                   "validated_result": None, "expected_result": expected,
                   "contract_valid": False, "error": None, "comparison": None, "outcome": None}
         case_timer = time.perf_counter()
@@ -55,18 +55,17 @@ def qualify(cases, builder, adapter, config, *, live=False, project_root=PROJECT
             reply = adapter.complete(messages, live=True)
             record["raw_model_output"] = sanitize(reply.text, secret)
             record["raw_response"] = sanitize(reply.raw_response, secret)
+            record["response_metadata"] = sanitize(reply.details, secret)
             parsed = parse_model_json(reply.text)
             record["parsed_result"] = parsed
             actual = validate_result(parsed, case["input"]["candidate_response"], project_root)
             record["validated_result"] = actual
             record["contract_valid"] = True
             record["comparison"] = compare_results(actual, expected)
-            matches = record["comparison"]["matches"]
-            record["outcome"] = "semantic_mismatch" if any(not matches[key] for key in
-                ("hard_fail", "overall", "decision", "insufficient_context", "hf_rules")) else (
-                "match" if matches["full_result"] else "full_result_mismatch")
+            record["outcome"] = qualification_outcome(True, record["comparison"])
         except AdapterError as exc:
             record["raw_response"] = exc.raw_response
+            record["response_metadata"] = exc.details
             record["error"] = {"category": "adapter", "kind": exc.kind, "details": exc.details}
         except ModelParseError:
             record["error"] = {"category": "parse", "kind": "malformed_model_json"}
@@ -74,14 +73,16 @@ def qualify(cases, builder, adapter, config, *, live=False, project_root=PROJECT
             # No raw exception text is logged: paths/strings may be model-controlled.
             record["error"] = {"category": "contract", "kind": "contract_invalid_result"}
         if record["error"]:
-            record["outcome"] = record["error"]["kind"]
+            record["outcome"] = qualification_outcome(False, None)
         record["latency_seconds"] = time.perf_counter() - case_timer
         records.append(record)
     elapsed = time.perf_counter() - timer
-    report = {"report_version": "1.1", "metadata": {
+    report = {"report_version": "1.2", "metadata": {
         "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
         "model": config.model, "backend_host": urlsplit(config.base_url).hostname, "timeout_seconds": config.timeout,
-        "temperature": 0, "max_tokens": 4096, "synthetic_only": True,
+        "temperature": 0, "max_tokens": config.max_tokens,
+        "reasoning_config": config.reasoning, "reasoning_effort_config": config.reasoning_effort,
+        "synthetic_only": True,
         "case_ids": [case["id"] for case in cases],
         "specification_sha256": hashlib.sha256(builder.specification.encode("utf-8")).hexdigest(),
         "metrics_policy": "Agreements use all attempts; HF precision/recall use valid responses only; zero denominators are null. Full match includes rationales and list order after source-ref normalization."},

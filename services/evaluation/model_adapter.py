@@ -5,7 +5,7 @@ import math
 import os
 import re
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 from urllib import error, request
 from urllib.parse import urlsplit
@@ -25,7 +25,8 @@ def sanitize(value, secret=None, depth=0):
         sensitive = {"authorization", "proxyauthorization", "headers", "requestheaders",
                      "responseheaders", "apikey", "xapikey", "accesstoken", "refreshtoken",
                      "token", "secret", "password", "credentials", "credential",
-                     "environment", "environmentvariables", "env", "environ", "osenviron"}
+                     "environment", "environmentvariables", "env", "environ", "osenviron",
+                     "reasoning", "reasoningcontent", "reasoningdetails", "thinking", "thinkingcontent"}
         for key, item in value.items():
             safe_key = sanitize(str(key), secret, depth + 1)
             normalized = re.sub(r"[^a-z0-9]", "", safe_key.lower())
@@ -75,6 +76,7 @@ ERROR_KINDS = frozenset({
     "timeout", "transport_error", "http_error", "provider_error", "empty_response",
     "response_format_error", "response_too_large", "live_flag_required", "missing_api_key",
     "invalid_model", "invalid_timeout", "invalid_key_environment_name", "invalid_base_url",
+    "truncated_response", "invalid_generation_config",
 })
 
 
@@ -96,6 +98,7 @@ class ModelParseError(ValueError):
 class ModelReply:
     text: str
     raw_response: str
+    details: dict = field(default_factory=dict)
 
 
 class EvaluatorModel(Protocol):
@@ -109,6 +112,22 @@ class ModelConfig:
     base_url: str
     timeout: float = 60.0
     api_key_env: str = "OPENROUTER_API_KEY"
+    max_tokens: int | None = 2500
+    reasoning: dict | None = None
+    reasoning_effort: str | None = None
+
+    def generation_parameters(self):
+        """Explicit provider-specific options; absent optional fields are omitted."""
+        self.validate()
+        parameters = {"temperature": 0}
+        if self.max_tokens is not None:
+            parameters["max_tokens"] = self.max_tokens
+        if self.reasoning is not None:
+            # Copy JSON data so requests cannot mutate caller configuration.
+            parameters["reasoning"] = json.loads(json.dumps(self.reasoning, allow_nan=False))
+        if self.reasoning_effort is not None:
+            parameters["reasoning_effort"] = self.reasoning_effort
+        return parameters
 
     def validate(self):
         if not isinstance(self.model, str) or not self.model.strip():
@@ -128,6 +147,21 @@ class ModelConfig:
             raise AdapterError("invalid_base_url")
         if any(char.isspace() for char in self.base_url):
             raise AdapterError("invalid_base_url")
+        if self.max_tokens is not None and (type(self.max_tokens) is not int or self.max_tokens <= 0):
+            raise AdapterError("invalid_generation_config")
+        if self.reasoning is not None and self.reasoning_effort is not None:
+            raise AdapterError("invalid_generation_config")
+        if self.reasoning_effort is not None and (type(self.reasoning_effort) is not str or self.reasoning_effort not in {"low", "medium", "high", "minimal", "none"}):
+            raise AdapterError("invalid_generation_config")
+        if self.reasoning is not None:
+            if type(self.reasoning) is not dict or not self.reasoning:
+                raise AdapterError("invalid_generation_config")
+            if "max_tokens" in self.reasoning and (type(self.reasoning["max_tokens"]) is not int or self.reasoning["max_tokens"] <= 0):
+                raise AdapterError("invalid_generation_config")
+            try:
+                json.dumps(self.reasoning, allow_nan=False)
+            except (ValueError, TypeError, RecursionError):
+                raise AdapterError("invalid_generation_config") from None
         return self
 
 
@@ -184,8 +218,9 @@ class OpenAICompatibleAdapter:
         key = os.environ.get(self.config.api_key_env)
         if not key or not key.strip():
             raise AdapterError("missing_api_key")
+        parameters = self.config.generation_parameters()
         body = json.dumps({"model": self.config.model, "messages": messages,
-                           "temperature": 0, "max_tokens": 4096}).encode("utf-8")
+                           **parameters}).encode("utf-8")
         req = request.Request(self.config.base_url.rstrip("/") + "/chat/completions", data=body,
                               headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
         status = 200
@@ -231,15 +266,28 @@ class OpenAICompatibleAdapter:
             raise AdapterError("provider_error", raw_response=raw,
                                details=_diagnostics(self.config, status, provider), secret=key)
         try:
-            text = payload["choices"][0]["message"]["content"]
+            choice = payload["choices"][0]
+            message = choice["message"]
+            text = message["content"]
         except (KeyError, IndexError, TypeError):
             raise AdapterError("response_format_error", raw_response=raw, details=details, secret=key) from None
+        details["finish_reason"] = choice.get("finish_reason") if isinstance(choice.get("finish_reason"), str) else None
+        native = choice.get("native_finish_reason", payload.get("native_finish_reason"))
+        if isinstance(native, str):
+            details["native_finish_reason"] = native
+        if isinstance(payload.get("provider"), str):
+            details["provider"] = payload["provider"]
+        details["reasoning_present"] = any(
+            bool(value.strip()) if isinstance(value, str) else bool(value)
+            for name in ("reasoning", "reasoning_content", "reasoning_details")
+            for value in [message.get(name)])
         if text is None or isinstance(text, str) and not text.strip():
-            raise AdapterError("empty_response", raw_response=raw, details=details, secret=key)
+            kind = "truncated_response" if details["finish_reason"] == "length" else "empty_response"
+            raise AdapterError(kind, raw_response=raw, details=details, secret=key)
         if not isinstance(text, str):
             raise AdapterError("response_format_error", raw_response=raw, details=details, secret=key)
         # Evaluator text is parsed unchanged; debug envelopes are sanitized now.
-        return ModelReply(text=text, raw_response=sanitize(raw, key))
+        return ModelReply(text=text, raw_response=sanitize(raw, key), details=sanitize(details, key))
 
 
 def parse_model_json(raw):
