@@ -274,7 +274,7 @@ def register_quiz(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="👉 Задать вопрос Ольге",
+                        text="👉 Задать вопрос",
                         callback_data="open_ai_chat",
                     )
                 ],

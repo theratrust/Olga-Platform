@@ -50,7 +50,7 @@ def register_callbacks(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="👉 Задать вопрос Ольге",
+                        text="👉 Задать вопрос",
                         callback_data="open_ai_chat",
                     )
                 ]
@@ -74,7 +74,7 @@ def register_callbacks(
             return
 
         await callback.message.answer(
-            "Напиши своё сообщение ниже, и я отвечу тебе лично 👇"
+            "Напиши своё сообщение ниже — AI-ассистент ответит, следуя методу Ольги 👇"
         )
 
         await state.set_state(state_cls.AI_CHAT)
