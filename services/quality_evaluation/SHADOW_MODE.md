@@ -95,7 +95,7 @@ any quality-based routing action.
 Events: `QUALITY_SHADOW_EVAL_SCHEDULED`, `QUALITY_SHADOW_EVAL_OK`,
 `QUALITY_SHADOW_EVAL_RECOVERED`, `QUALITY_SHADOW_EVAL_FAIL`.
 JSON logs contain only timestamp, `mode=quality_shadow`, evaluator model,
-candidate SHA-256, hashed session ID, validated six-dimension scores,
+candidate SHA-256, hashed conversation-instance ID, validated six-dimension scores,
 quality flag IDs, overall_quality, insufficient_context present Boolean,
 first-pass/final contract validity, retry attempted/recovered, latency_ms and
 allowlisted safe error kinds. Partial scheduling/failure events omit unavailable
@@ -105,3 +105,19 @@ The active credential is redacted from metadata too. Only aggregates are returne
 from runtime observation; no raw result or artifact is persisted. Logging failures
 are contained. Q03/Q08 remain higher-confidence diagnostics on the frozen synthetic
 corpus only; all flags and scores remain observational, with no routing authorization.
+
+## Conversation-instance correlation
+
+`session_hash` now identifies one conversation instance created by `/new`, rather
+than a Telegram user. Each `/new` generates a fresh random UUID correlation value
+stored only as `shadow_conversation_id` in the existing in-memory FSM data. Normal
+AI_CHAT messages reuse it; if it is absent or empty/invalid, the handler generates
+and stores a defensive fallback. Both methodology and quality observers receive
+the same conversation value, never bare user_id, and existing runtimes emit only
+its SHA-256 hash. The raw value is never logged, shown to the user, added to the
+generator prompt, or persisted in the database. Archetype and other FSM data are
+preserved. No evaluator schema, semantics, route, or retry policy changes.
+
+A process restart loses the in-memory correlation value; the fallback starts a new
+correlation instance. Historical user-based hashes cannot retroactively establish
+conversation boundaries. Hashes remain correlation identifiers, not anonymization.

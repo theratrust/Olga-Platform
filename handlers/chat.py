@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -38,6 +39,7 @@ def register_chat(
 
         await clear_chat_history(user_id)
         await state.set_state(state_cls.AI_CHAT)
+        await state.update_data(shadow_conversation_id=uuid4().hex)
 
         await message.answer(
             "Начинаем новый разговор. Предыдущая история очищена.\n\n"
@@ -75,6 +77,11 @@ def register_chat(
 
         data = await state.get_data()
         archetype = data.get("archetype", "Полутень")
+        # FSM-only correlation; never enters the prompt, database or user messages.
+        conversation_id = data.get("shadow_conversation_id")
+        if not isinstance(conversation_id, str) or not conversation_id:
+            conversation_id = uuid4().hex
+            await state.update_data(shadow_conversation_id=conversation_id)
 
         system_instruction = build_coaching_prompt(
             first_name=first_name,
@@ -201,13 +208,13 @@ def register_chat(
             # It never awaits an evaluator or changes the candidate/route.
             if shadow_observer is not None:
                 try:
-                    shadow_observer(history, user_text, ai_draft, session_id=user_id)
+                    shadow_observer(history, user_text, ai_draft, session_id=conversation_id)
                 except Exception:
                     logging.error("SHADOW_EVAL_FAIL post_delivery_hook_error")
 
             if quality_shadow_observer is not None:
                 try:
-                    quality_shadow_observer(history, user_text, ai_draft, session_id=user_id)
+                    quality_shadow_observer(history, user_text, ai_draft, session_id=conversation_id)
                 except Exception:
                     try:
                         logging.error("QUALITY_SHADOW_EVAL_FAIL %s", json.dumps({

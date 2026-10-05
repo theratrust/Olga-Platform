@@ -51,7 +51,7 @@ The repair module has no gold corpus or qualification-metric dependency.
 
 Structured log events: SHADOW_EVAL_OK, SHADOW_EVAL_RECOVERED, SHADOW_EVAL_FAIL.
 Success/failure projection records include timestamp, mode=shadow, evaluator_model,
-candidate SHA-256, hashed existing session ID, hard_fail, violation rule IDs, scores,
+candidate SHA-256, hashed conversation-instance ID, hard_fail, violation rule IDs, scores,
 overall, decision, shadow_route, insufficient_context present flag, first/final
 contract validity, retry attempted/recovered, latency_ms, first-pass error kind
 and safe final error kind.
@@ -131,3 +131,19 @@ log captures does not double-count identical events. Without runtime attempt IDs
 conflicting records or separate events sharing the same identity cannot be resolved
 by this observational reporter. It provides no methodology gold comparison,
 qualification approval, assurance verdict or routing action.
+
+## Conversation-instance correlation
+
+`session_hash` now identifies one conversation instance created by `/new`, rather
+than a Telegram user. Each `/new` generates a fresh random UUID correlation value
+stored only as `shadow_conversation_id` in the existing in-memory FSM data. Normal
+AI_CHAT messages reuse it; if it is absent or empty/invalid, the handler generates
+and stores a defensive fallback. Both methodology and quality observers receive
+the same conversation value, never bare user_id, and existing runtimes emit only
+its SHA-256 hash. The raw value is never logged, shown to the user, added to the
+generator prompt, or persisted in the database. Archetype and other FSM data are
+preserved. No evaluator schema, semantics, route, or retry policy changes.
+
+A process restart loses the in-memory correlation value; the fallback starts a new
+correlation instance. Historical user-based hashes cannot retroactively establish
+conversation boundaries. Hashes remain correlation identifiers, not anonymization.

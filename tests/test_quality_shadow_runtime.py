@@ -396,7 +396,7 @@ def test_delivery_before_quality_failure_preserves_candidate(monkeypatch, direct
             types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
             AsyncMock(), recent, pending, AsyncMock(), direct_chat=direct, shadow_observer=method,
             quality_shadow_observer=quality if quality_enabled else None)
-        state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}))
+        state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
         message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text=USER,
                                         chat=types.SimpleNamespace(id=12), answer=AsyncMock())
         await handler(message, state)
@@ -421,3 +421,165 @@ def test_bot_wiring_and_shutdown_keeps_direct_chat():
     assert "quality_shadow_observer=quality_shadow_dispatcher.submit" in source
     assert "await quality_shadow_dispatcher.close()" in source
     assert "direct_chat=DEV_DIRECT_CHAT" in source
+
+
+class ConversationFSM:
+    def __init__(self, data):
+        self.data = copy.deepcopy(data)
+        self.current_state = "chat"
+        self.updates = []
+    async def get_state(self):
+        return self.current_state
+    async def get_data(self):
+        return copy.deepcopy(self.data)
+    async def set_state(self, value):
+        self.current_state = value.state
+    async def update_data(self, **kwargs):
+        self.updates.append(copy.deepcopy(kwargs))
+        self.data.update(kwargs)
+        return copy.deepcopy(self.data)
+
+
+def conversation_chat_ports(monkeypatch, direct, method_observer, quality_observer):
+    module = chat_module(monkeypatch)
+    deliveries = []
+    commands = {}
+    async def send(user_id, text, **kwargs):
+        deliveries.append((user_id, text, kwargs))
+    bot = types.SimpleNamespace(send_chat_action=AsyncMock(), send_message=send)
+    class Registrar:
+        def __call__(self, *a):
+            def register_command(function):
+                commands[function.__name__] = function
+                return function
+            return register_command
+        def register(self, *a): pass
+    dp = types.SimpleNamespace(message=Registrar())
+    response = types.SimpleNamespace(choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=CANDIDATE))])
+    generate = AsyncMock(return_value=response)
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=generate)))
+    async def recent(*a, **k):
+        assert k == {"limit": 20}
+        return copy.deepcopy(CONTEXT)
+    add, pending, clear = AsyncMock(), AsyncMock(return_value=55), AsyncMock()
+    handler = module.register_chat(dp, bot, client, "existing-coach", [99],
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
+        add, recent, pending, clear, direct_chat=direct,
+        shadow_observer=method_observer, quality_shadow_observer=quality_observer)
+    def message(text=USER):
+        return types.SimpleNamespace(from_user=types.SimpleNamespace(id=987654321, username=None), text=text,
+                                     chat=types.SimpleNamespace(id=987654321), answer=AsyncMock())
+    return types.SimpleNamespace(handler=handler, new=commands["cmd_new"], generate=generate,
+        message=message, deliveries=deliveries, add=add, pending=pending, clear=clear)
+
+
+@pytest.mark.parametrize("direct", [True, False])
+@pytest.mark.parametrize("initial_id", [None, "", "existing-private-conversation-id"])
+def test_conversation_correlation_same_messages_new_rotates_and_fallback(monkeypatch, direct, initial_id):
+    observed_method, observed_quality = [], []
+    ports = conversation_chat_ports(monkeypatch, direct,
+        lambda *a, **k: observed_method.append(k["session_id"]),
+        lambda *a, **k: observed_quality.append(k["session_id"]))
+    data = {"archetype": "Полутень", "unrelated": "preserved"}
+    if initial_id is not None:
+        data["shadow_conversation_id"] = initial_id
+    state = ConversationFSM(data)
+    async def scenario():
+        first, second = ports.message(), ports.message()
+        await ports.handler(first, state)
+        await ports.handler(second, state)
+        assert first.answer.await_count == second.answer.await_count == 1
+        first_id = state.data["shadow_conversation_id"]
+        assert observed_method == observed_quality == [first_id, first_id]
+        assert first_id != str(987654321)
+        if initial_id:
+            assert first_id == initial_id and not state.updates
+        else:
+            assert len(first_id) == 32 and len(state.updates) == 1
+        before_new = copy.deepcopy(state.data)
+        reset_message = ports.message("/new")
+        await ports.new(reset_message, state)
+        next_id = state.data["shadow_conversation_id"]
+        assert next_id != first_id and len(next_id) == 32
+        assert state.current_state == "chat"
+        assert {k:v for k,v in state.data.items() if k != "shadow_conversation_id"} == {k:v for k,v in before_new.items() if k != "shadow_conversation_id"}
+        reset_message.answer.assert_awaited_once_with("Начинаем новый разговор. Предыдущая история очищена.\n\nНапиши, что сейчас для тебя важно.")
+        ports.clear.assert_awaited_once_with(987654321)
+        third = ports.message()
+        await ports.handler(third, state)
+        assert observed_method == observed_quality == [first_id, first_id, next_id]
+        assert third.answer.await_count == 1
+        assert ports.generate.await_count == 3
+        assert ports.generate.call_args_list[0] == ports.generate.call_args_list[1] == ports.generate.call_args_list[2]
+        assert ports.generate.call_args.kwargs["max_tokens"] == 350
+        assert len(ports.deliveries) == 3
+        assert ports.deliveries[0] == ports.deliveries[1] == ports.deliveries[2]
+        if direct:
+            assert ports.deliveries[0][1] == CANDIDATE
+            assert ports.pending.await_count == 0
+        else:
+            assert ports.pending.await_count == 3
+        persisted = str(ports.add.call_args_list + ports.pending.call_args_list + ports.clear.call_args_list)
+        user_facing = str(first.answer.call_args_list + second.answer.call_args_list + reset_message.answer.call_args_list + third.answer.call_args_list + ports.deliveries)
+        for raw_id in (first_id, next_id):
+            assert raw_id not in persisted + user_facing + str(ports.generate.call_args_list)
+    asyncio.run(scenario())
+
+
+def test_each_new_creates_fresh_fsm_only_id_even_without_intervening_message(monkeypatch):
+    ports = conversation_chat_ports(monkeypatch, True, None, None)
+    state = ConversationFSM({"archetype": "Полутень"})
+    async def scenario():
+        await ports.new(ports.message("/new"), state)
+        first = state.data["shadow_conversation_id"]
+        await ports.new(ports.message("/new"), state)
+        assert first != state.data["shadow_conversation_id"]
+        assert state.data["archetype"] == "Полутень"
+        assert ports.generate.await_count == 0
+        assert ports.add.await_count == ports.pending.await_count == 0
+        assert ports.clear.await_count == 2
+    asyncio.run(scenario())
+
+
+def test_conversation_id_and_user_id_never_reach_structured_shadow_logs(monkeypatch, caplog):
+    from services.evaluation import runtime as method_runtime
+    spec = importlib.util.spec_from_file_location("conversation_method_ports", ROOT / "tests/test_evaluator_shadow_runtime.py")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    method_ids, quality_ids = [], []
+    raw_ids = []
+    async def scenario():
+        for _ in range(2):
+            method_model = helper.Model([json.dumps(helper.mock_result())])
+            quality_model = Model([result()])
+            def method_worker(*a, **k):
+                return method_runtime.evaluate_candidate_shadow(*a, adapter=method_model, **k)
+            def quality_worker(*a, **k):
+                return runtime.evaluate_candidate_quality_shadow(*a, adapter=quality_model, **k)
+            method = method_runtime.ShadowDispatcher(method_runtime.ShadowConfig(enabled=True), method_worker)
+            quality = runtime.QualityShadowDispatcher(CONFIG, quality_worker)
+            def method_observer(*a, **k):
+                method_ids.append(k["session_id"])
+                return method.submit(*a, **k)
+            def quality_observer(*a, **k):
+                quality_ids.append(k["session_id"])
+                return quality.submit(*a, **k)
+            ports = conversation_chat_ports(monkeypatch, True, method_observer, quality_observer)
+            state = ConversationFSM({"archetype": "Полутень"})
+            await ports.new(ports.message("/new"), state)
+            raw_ids.append(state.data["shadow_conversation_id"])
+            await ports.handler(ports.message(), state)
+            await asyncio.gather(method.close(), quality.close())
+            assert ports.generate.await_count == 1 and len(ports.deliveries) == 1
+    asyncio.run(scenario())
+    assert method_ids == quality_ids == raw_ids and raw_ids[0] != raw_ids[1]
+    records = [r for r in caplog.records if r.name in (runtime.__name__, method_runtime.__name__)]
+    assert len(records) == 8  # Each observer schedules and completes per conversation.
+    text = "\n".join(r.getMessage() for r in records)
+    for value in (*raw_ids, "987654321", USER, CANDIDATE):
+        assert value not in text
+    events = [json.loads(r.getMessage().split(" ", 1)[1]) for r in records]
+    for raw_id in raw_ids:
+        matching = [e for e in events if e.get("session_hash") == hashlib.sha256(raw_id.encode()).hexdigest()]
+        assert len(matching) == 4
+        assert {e["mode"] for e in matching} == {"shadow", "quality_shadow"}

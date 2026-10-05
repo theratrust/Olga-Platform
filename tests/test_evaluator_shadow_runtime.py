@@ -314,7 +314,7 @@ def test_actual_chat_handler_delivers_identical_candidate_before_observation(mon
     handler = module.register_chat(dp, bot, client, "existing-coach", [],
         types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
         AsyncMock(), recent, AsyncMock(), AsyncMock(), direct_chat=True, shadow_observer=observe)
-    state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}))
+    state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
     message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text="Я не знаю.",
                                     chat=types.SimpleNamespace(id=12), answer=AsyncMock())
     asyncio.run(handler(message, state))
@@ -410,7 +410,7 @@ def test_moderation_delivery_unchanged_and_hook_runs_after_admin_delivery(monkey
             shadow_observer=observe if observer_enabled else None)
         message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text="Я не знаю.",
                                         chat=types.SimpleNamespace(id=12), answer=AsyncMock())
-        state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}))
+        state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
         await handler(message, state)
         assert generate.await_count == pending.await_count == message.answer.await_count == 1
         return deliveries, pending.call_args
