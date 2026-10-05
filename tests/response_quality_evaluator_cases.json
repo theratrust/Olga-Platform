@@ -1,0 +1,851 @@
+{
+  "schema_version": "1.0",
+  "language": "ru",
+  "synthetic": true,
+  "provenance": "derived_product_quality_criteria",
+  "specification": "knowledge/evaluation/качество_ответов_оценка.md",
+  "description": "22 синтетических кейса производной оценки качества. Метки составлены из рубрики вручную, без GLM и без импорта методологических gold-ожиданий. Методологическая допустимость отдельно не оценивается.",
+  "cases": [
+    {
+      "id": "specific_grounded_reflection",
+      "title": "Конкретное отражение различения",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я согласилась помочь сестре, хотя хотела провести вечер одна. Злюсь не на неё, а на своё автоматическое согласие.",
+        "candidate_response": "Здесь для тебя важно не само приглашение, а момент, когда согласие прозвучало раньше твоего выбора.",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Ответ различает приглашение и автоматическое согласие именно в этом материале; вопрос не требуется.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "useful_concise_question",
+      "title": "Короткий полезный вопрос",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Хочу сменить работу, но мне важно сохранить команду, с которой я выросла.",
+        "candidate_response": "Что именно в этой команде тебе важно сохранить, даже если сама работа изменится?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Вопрос отделяет ценность команды от места работы и открывает конкретный следующий фокус.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "no_question_useful",
+      "title": "Полезное различение без вопроса",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Когда я отдыхаю, думаю о работе. Когда работаю, мечтаю об отдыхе. Сам переключатель будто не срабатывает.",
+        "candidate_response": "Похоже, твой вопрос сейчас о переходе между двумя режимами, а не только о количестве работы или отдыха.",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Осторожное различение опирается на названный переключатель; отсутствие вопроса не снижает качество.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "generic_paraphrase",
+      "title": "Общий пересказ без движения",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я согласилась на третий проект и теперь понимаю, что мне важно оставить время на учёбу.",
+        "candidate_response": "Ты согласилась на третий проект, и тебе важно оставить время на учёбу. Что ты чувствуешь?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 2,
+          "question_quality": 1,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q01_GENERIC_REFLECTION",
+            "evidence": "Что ты чувствуешь?"
+          },
+          {
+            "flag_id": "Q02_UNNECESSARY_PARAPHRASE",
+            "evidence": "Ты согласилась на третий проект"
+          },
+          {
+            "flag_id": "Q04_LOW_PROGRESSION",
+            "evidence": "тебе важно оставить время на учёбу"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Почти полный пересказ не открывает различение между согласием и учебным временем; общий вопрос не добавляет фокуса.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "mild_extra_paraphrase",
+      "title": "Некритичный повтор перед полезным вопросом",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "В выходной хочу побыть одна, но уже пообещала встретиться с друзьями.",
+        "candidate_response": "Ты хочешь побыть одна, а встреча уже обещана. Что для тебя сейчас означает это обещание?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 1,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "acceptable",
+        "reason": "Первое предложение немного избыточно, но вопрос конкретно открывает значение обещания; балл 1 не требует флага.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "three_turn_paraphrase",
+      "title": "Третий последовательный пересказ",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "А сегодня всё-таки написала ей короткое сообщение.",
+        "candidate_response": "Сегодня ты всё-таки написала ей короткое сообщение. Что ты замечаешь?",
+        "conversation_context": [
+          {
+            "role": "user",
+            "content": "После разговора с сестрой я молчала весь вечер."
+          },
+          {
+            "role": "assistant",
+            "content": "Ты молчала весь вечер. Что ты замечаешь?"
+          },
+          {
+            "role": "user",
+            "content": "Потом решила не писать первой."
+          },
+          {
+            "role": "assistant",
+            "content": "Ты решила не писать первой. Что ты замечаешь?"
+          }
+        ]
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 0,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q02_UNNECESSARY_PARAPHRASE",
+            "evidence": "Сегодня ты всё-таки написала ей короткое сообщение."
+          },
+          {
+            "flag_id": "Q03_REPETITIVE_STRUCTURE",
+            "evidence": "Что ты замечаешь?"
+          },
+          {
+            "flag_id": "Q05_GENERIC_QUESTION",
+            "evidence": "Что ты замечаешь?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Три последовательных ответа копируют последний факт и заканчиваются одним общим вопросом, без развития темы.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "same_question_structure",
+      "title": "Одинаковый общий вопрос на разные ходы",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Сегодня впервые отменила одно дело и почувствовала облегчение.",
+        "candidate_response": "Как это для тебя?",
+        "conversation_context": [
+          {
+            "role": "user",
+            "content": "Я не успеваю отдыхать."
+          },
+          {
+            "role": "assistant",
+            "content": "Как это для тебя?"
+          },
+          {
+            "role": "user",
+            "content": "Выходной тоже занят делами."
+          },
+          {
+            "role": "assistant",
+            "content": "Как это для тебя?"
+          }
+        ]
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 2,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q03_REPETITIVE_STRUCTURE",
+            "evidence": "Как это для тебя?"
+          },
+          {
+            "flag_id": "Q05_GENERIC_QUESTION",
+            "evidence": "Как это для тебя?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Третий одинаковый вопрос не использует новый факт отмены дела и названное облегчение.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "dont_know_space",
+      "title": "Уместно оставить пространство",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я не знаю. Можно я пока не буду искать ответ?",
+        "candidate_response": "Да, можно пока оставить этот вопрос открытым.",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Ответ прямо откликается на просьбу не искать ответ и не заполняет паузу; для этого материала он достаточно глубок.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "dont_know_filler",
+      "title": "Общее заполнение паузы",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я не знаю. Можно я пока не буду искать ответ?",
+        "candidate_response": "Благодарю за открытость. Этот процесс важен, и каждый шаг имеет значение. Продолжим наше исследование: что ты замечаешь?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 2,
+          "naturalness": 0,
+          "question_quality": 0,
+          "proportionality": 1
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q01_GENERIC_REFLECTION",
+            "evidence": "Этот процесс важен"
+          },
+          {
+            "flag_id": "Q06_TEMPLATE_LANGUAGE",
+            "evidence": "Продолжим наше исследование"
+          },
+          {
+            "flag_id": "Q05_GENERIC_QUESTION",
+            "evidence": "что ты замечаешь?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Шаблонное вступление и общий вопрос игнорируют конкретную просьбу пока не искать ответ.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "allowed_but_shallow",
+      "title": "Поверхностный ответ без методологического вердикта",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я заметила: сама встреча мне нравится, а обязательство встречаться каждую неделю — нет.",
+        "candidate_response": "Для тебя это важно. Что ты замечаешь?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q01_GENERIC_REFLECTION",
+            "evidence": "Для тебя это важно."
+          },
+          {
+            "flag_id": "Q04_LOW_PROGRESSION",
+            "evidence": "Что ты замечаешь?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Критерии качества показывают, что ответ не использует уже сформулированное различение встречи и регулярного обязательства; HF-вердикт здесь не выносится.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "allowed_and_progressive",
+      "title": "Конкретный следующий фокус без HF-оценки",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я заметила: сама встреча мне нравится, а обязательство встречаться каждую неделю — нет.",
+        "candidate_response": "Что меняется для тебя, если отделить желание этой встречи от обещания встречаться каждую неделю?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Вопрос исследует пользовательское различение, не повторяя его механически; метка качества не является доказательством безопасности.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "copy_then_notice",
+      "title": "Копирование почти всей фразы",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я постоянно соглашаюсь помогать коллегам, откладываю свой проект и вечером жалею, что снова не осталось времени для меня.",
+        "candidate_response": "Ты постоянно соглашаешься помогать коллегам, откладываешь свой проект и вечером жалеешь, что снова не осталось времени для тебя. Что ты замечаешь?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 1,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q02_UNNECESSARY_PARAPHRASE",
+            "evidence": "откладываешь свой проект и вечером жалеешь"
+          },
+          {
+            "flag_id": "Q04_LOW_PROGRESSION",
+            "evidence": "Что ты замечаешь?"
+          },
+          {
+            "flag_id": "Q05_GENERIC_QUESTION",
+            "evidence": "Что ты замечаешь?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Почти весь пользовательский текст повторён, после него общий вопрос; новый фокус исследования не появляется.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "repeated_what_exactly",
+      "title": "Повтор «что именно» без нового различения",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Чтобы можно было остановиться, когда я сама захочу.",
+        "candidate_response": "Что именно тебе важно в том, чтобы остановиться, когда ты сама захочешь?",
+        "conversation_context": [
+          {
+            "role": "user",
+            "content": "Хочу больше свободного времени."
+          },
+          {
+            "role": "assistant",
+            "content": "Что именно тебе важно в свободном времени?"
+          },
+          {
+            "role": "user",
+            "content": "Хочу рисовать без дедлайна."
+          },
+          {
+            "role": "assistant",
+            "content": "Что именно тебе важно в рисовании без дедлайна?"
+          }
+        ]
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 1,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q03_REPETITIVE_STRUCTURE",
+            "evidence": "Что именно тебе важно"
+          },
+          {
+            "flag_id": "Q05_GENERIC_QUESTION",
+            "evidence": "Что именно тебе важно"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Третий вопрос повторяет структуру и вкладывает в неё новые слова пользователя, вместо работы с уже названной свободой остановки.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "repeated_how_seems",
+      "title": "Повтор «как тебе кажется»",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Теперь я могу спокойно читать с дочкой перед сном.",
+        "candidate_response": "Как тебе кажется, что это для тебя значит?",
+        "conversation_context": [
+          {
+            "role": "user",
+            "content": "Я стала позже отвечать на рабочие сообщения."
+          },
+          {
+            "role": "assistant",
+            "content": "Как тебе кажется, что это для тебя значит?"
+          },
+          {
+            "role": "user",
+            "content": "Вечером у меня стало больше времени дома."
+          },
+          {
+            "role": "assistant",
+            "content": "Как тебе кажется, что это для тебя значит?"
+          }
+        ]
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 2,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q03_REPETITIVE_STRUCTURE",
+            "evidence": "Как тебе кажется"
+          },
+          {
+            "flag_id": "Q05_GENERIC_QUESTION",
+            "evidence": "что это для тебя значит?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Третий идентичный общий вопрос пропускает конкретный новый материал чтения с дочкой.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "context_miss",
+      "title": "Ответ о другом предмете",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Мне не хочется менять работу. Я пытаюсь понять, как перестать брать чужие смены.",
+        "candidate_response": "Что важно сохранить при переходе на новую работу?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q07_CONTEXT_MISS",
+            "evidence": "при переходе на новую работу"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Пользователь прямо исключил смену работы, а кандидат сделал её предметом исследования.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "overelaborate_minimal",
+      "title": "Избыточная схема на минимальный вход",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Пока не готова говорить подробно.",
+        "candidate_response": "Благодарю за обозначение границы. Наш разговор может включать несколько направлений: описание ситуации, различение значимого, исследование возможного, возвращение к внутреннему отклику и внимательное наблюдение за процессом. Каждое направление обладает собственной глубиной, а вместе они образуют пространство последовательного исследования. Можно отдельно говорить о каждом из этих направлений, а можно рассматривать их взаимосвязь. Важен сам процесс, его ритм, его многослойность и его постепенное раскрытие.",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 1,
+          "progression": 0,
+          "non_repetition": 2,
+          "naturalness": 0,
+          "question_quality": 2,
+          "proportionality": 0
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q06_TEMPLATE_LANGUAGE",
+            "evidence": "пространство последовательного исследования"
+          },
+          {
+            "flag_id": "Q08_OVERLONG_OR_UNDERDEVELOPED",
+            "evidence": "Наш разговор может включать несколько направлений"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Длинная отвлечённая схема несоразмерна просьбе не говорить подробно и звучит как шаблонное описание процесса.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "concise_specific",
+      "title": "Коротко, но конкретно",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Мне важна не похвала начальника, а возможность самой выбирать темп.",
+        "candidate_response": "Как ты узнаёшь, что темп выбираешь именно ты?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Короткий вопрос работает с точно названным критерием собственного темпа, а не с общей темой одобрения.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "justified_once",
+      "title": "Повтор по прямой просьбе",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Повтори, пожалуйста, тот вопрос про обещание. Я хочу на нём задержаться.",
+        "candidate_response": "Что для тебя сейчас означает это обещание?",
+        "conversation_context": [
+          {
+            "role": "assistant",
+            "content": "Что для тебя сейчас означает это обещание?"
+          }
+        ]
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Повтор оправдан прямой просьбой пользователя и помогает задержаться на выбранном им фокусе.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "formulaic_multiple_turns",
+      "title": "Формула проявляется только через несколько ходов",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Сегодня мне хочется рисовать уже не ради результата, а ради самого процесса.",
+        "candidate_response": "Слышу тебя. Что именно сейчас откликается?",
+        "conversation_context": [
+          {
+            "role": "user",
+            "content": "Вчера совсем не хотела рисовать."
+          },
+          {
+            "role": "assistant",
+            "content": "Слышу тебя. Что именно сейчас откликается?"
+          },
+          {
+            "role": "user",
+            "content": "Потом просто открыла альбом."
+          },
+          {
+            "role": "assistant",
+            "content": "Слышу тебя. Что именно сейчас откликается?"
+          }
+        ],
+        "recent_assistant_response_patterns": [
+          "Вводная «Слышу тебя» и вопрос «Что именно сейчас откликается?» повторяются в предыдущих двух ответах."
+        ]
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 0,
+          "progression": 0,
+          "non_repetition": 0,
+          "naturalness": 0,
+          "question_quality": 0,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q03_REPETITIVE_STRUCTURE",
+            "evidence": "Слышу тебя. Что именно сейчас откликается?"
+          },
+          {
+            "flag_id": "Q06_TEMPLATE_LANGUAGE",
+            "evidence": "Слышу тебя."
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Та же вводная и тот же вопрос применены к третьему разному ходу, хотя появился содержательный переход от результата к процессу.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    },
+    {
+      "id": "missing_repetition_history",
+      "title": "Материально отсутствует история повторов",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я хочу продолжить разговор про обещание. Не уверена, повторяемся ли мы сейчас.",
+        "candidate_response": "Что для тебя означает обещание в этом разговоре?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": null,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "insufficient_context",
+        "reason": "Текущий вопрос конкретно открывает смысл названного обещания, но для оценки повторяемости не хватает прежних реплик. Повтор не объявляется доказанным.",
+        "insufficient_context": {
+          "present": true,
+          "items": [
+            {
+              "dimensions": [
+                "non_repetition"
+              ],
+              "missing": "Предыдущие ответы, с которыми пользователь сравнивает вопрос.",
+              "reason": "Не предоставлены формулировки прежних вопросов."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "weak_with_context_gap",
+      "title": "Доказанная слабость и отдельный пробел",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Снова тот же вопрос. Я уже сказала: встреча приятна, а обязательство каждую неделю — нет.",
+        "candidate_response": "Встреча приятна, а обязательство каждую неделю — нет. Что ты замечаешь?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 0,
+          "non_repetition": null,
+          "naturalness": 2,
+          "question_quality": 1,
+          "proportionality": 2
+        },
+        "quality_flags": [
+          {
+            "flag_id": "Q04_LOW_PROGRESSION",
+            "evidence": "Что ты замечаешь?"
+          }
+        ],
+        "overall_quality": "weak",
+        "reason": "Текущий ответ лишь пересказывает названное различение: progression=0 доказан независимо от отсутствующей истории повторов.",
+        "insufficient_context": {
+          "present": true,
+          "items": [
+            {
+              "dimensions": [
+                "non_repetition"
+              ],
+              "missing": "Предыдущие вопросы в этом разговоре.",
+              "reason": "Нельзя проверить устойчивость повторения по одному текущему ответу."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "proportionate_depth",
+      "title": "Уместная глубина для богатого материала",
+      "synthetic": true,
+      "provenance": "derived_product_quality_criteria",
+      "input": {
+        "user_message": "Я хочу закончить книгу, но каждый раз берусь за срочную помощь другим. Когда отказываюсь, боюсь потерять связь с ними. При этом замечаю: когда у меня есть время на книгу, я сама охотнее общаюсь. Мне хочется понять эту связь, а не составить ещё один план.",
+        "candidate_response": "В твоём описании есть два разных пути к связи: срочно помогать, чтобы не потерять её, и иметь своё время, после которого общение становится желанным. Как ты различаешь эти два вида контакта в самом моменте согласия помочь?",
+        "conversation_context": []
+      },
+      "expected": {
+        "scores": {
+          "contextual_specificity": 2,
+          "progression": 2,
+          "non_repetition": 2,
+          "naturalness": 2,
+          "question_quality": 2,
+          "proportionality": 2
+        },
+        "quality_flags": [],
+        "overall_quality": "strong",
+        "reason": "Ответ соединяет два прямо названных наблюдения и исследует момент согласия; длина соразмерна содержательному входу и просьбе не строить план.",
+        "insufficient_context": {
+          "present": false,
+          "items": []
+        }
+      }
+    }
+  ]
+}
