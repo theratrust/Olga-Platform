@@ -8,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from prompts.coaching import build_coaching_prompt
+from services.coaching_generator import build_system_instruction, build_messages, generate_candidate
 from utils.telegram import split_long_text
 
 
@@ -83,19 +83,14 @@ def register_chat(
             conversation_id = uuid4().hex
             await state.update_data(shadow_conversation_id=conversation_id)
 
-        system_instruction = build_coaching_prompt(
+        system_instruction = build_system_instruction(
             first_name=first_name,
             archetype=archetype,
         )
 
         history = await get_recent_history(user_id, limit=20)
 
-        messages_payload = [
-            {
-                "role": "system",
-                "content": system_instruction,
-            }
-        ] + history
+        messages_payload = build_messages(system_instruction, history)
 
         await message.answer(
             f"Спасибо за твой вопрос, {first_name}! "
@@ -107,22 +102,12 @@ def register_chat(
         )
 
         try:
-            response = await ai_client.chat.completions.create(
-                model=model_name,
-                messages=messages_payload,
-                max_tokens=350,
-                extra_headers={
-                    "HTTP-Referer": "https://telegram.org",
-                    "X-Title": "Olga Coaching Bot",
-                },
-            )
+            ai_draft = await generate_candidate(ai_client, model_name, messages_payload)
             logging.info(
                 "OpenRouter response received for user %s via model %s",
                 user_id,
                 model_name,
             )
-
-            ai_draft = response.choices[0].message.content
 
             if direct_chat:
                 await bot.send_message(user_id, ai_draft)
