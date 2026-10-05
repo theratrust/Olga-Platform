@@ -28,6 +28,7 @@ from handlers.method_drafts import register_method_drafts
 from handlers.method_assets import register_method_assets
 from services.methods.loader import load_shadow_light_version
 from services.evaluation.runtime import ShadowDispatcher
+from services.quality_evaluation.runtime import QualityShadowDispatcher
 
 load_dotenv()
 
@@ -153,6 +154,7 @@ register_method_assets(
 )
 
 shadow_dispatcher = ShadowDispatcher()
+quality_shadow_dispatcher = QualityShadowDispatcher()
 
 ai_chat_handler = register_chat(
     dp=dp,
@@ -169,6 +171,7 @@ ai_chat_handler = register_chat(
     clear_chat_history=clear_chat_history,
     direct_chat=DEV_DIRECT_CHAT,
     shadow_observer=shadow_dispatcher.submit,
+    quality_shadow_observer=quality_shadow_dispatcher.submit,
 )
 
 register_voice(
@@ -191,7 +194,10 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
-        await shadow_dispatcher.close()
+        try:
+            await shadow_dispatcher.close()
+        finally:
+            await quality_shadow_dispatcher.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

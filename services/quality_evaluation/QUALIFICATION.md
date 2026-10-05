@@ -4,7 +4,8 @@ This harness evaluates **derived product-quality criteria** against the frozen
 22-case synthetic response-quality corpus. It does not qualify Olga methodology
 compliance. The methodology evaluator remains separate. No quality score can
 compensate for a methodology hard fail. This harness is for model selection only;
-there is no runtime integration or change to Telegram, generation or shadow behavior.
+the qualification harness does not integrate with runtime. The separate opt-in DEV
+quality observer preserves Telegram delivery, generation and methodology shadow behavior.
 
 ## Offline default and explicit live mode
 
@@ -92,3 +93,38 @@ python3 tests/run_response_quality_cases.py
 python3 tests/run_coaching_evaluator_cases.py
 git diff --check
 ```
+
+## Qualified DEV quality-shadow baseline
+
+GLM 5.2 (`z-ai/glm-5.2`) is selected as the **QUALIFIED BASELINE candidate**
+for DEV response-quality shadow evaluation. These operator-supplied frozen-run
+results qualify a candidate for observation only, not methodology compliance.
+
+Three frozen 22-case runs / 66 judgments:
+
+- GLM overall_quality agreement: 58/66 = 87.9%.
+- Sonnet overall_quality agreement: 57/66 = 86.4%.
+- Both: 66/66 first-pass contract valid; zero final infrastructure failures.
+
+GLM dimension agreement:
+
+| Dimension | Agreement |
+| --- | --- |
+| contextual_specificity | 69.7% |
+| progression | 89.4% |
+| non_repetition | 84.8% |
+| naturalness | 66.7% |
+| question_quality | 86.4% |
+| proportionality | 63.6% |
+
+Persistent GLM semantic mismatches: `mild_extra_paraphrase` 3/3,
+`missing_repetition_history` 3/3, and `justified_once` 2/3.
+`Q03_REPETITIVE_STRUCTURE` and `Q08_OVERLONG_OR_UNDERDEVELOPED` each have
+100% precision / 100% recall across 66 frozen judgments. Their higher-confidence
+status remains diagnostic and is limited to these synthetic qualification runs.
+Q01/Q04/Q06/Q07 have low precision and must be diagnostic only.
+No quality result is authorized for blocking, routing or regeneration.
+No quality score can compensate for a methodology hard fail.
+
+The qualification harness remains a model-selection tool. The separate DEV
+observational integration is documented in [SHADOW_MODE.md](SHADOW_MODE.md).

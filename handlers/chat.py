@@ -1,4 +1,6 @@
+import json
 import logging
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -24,6 +26,7 @@ def register_chat(
     clear_chat_history,
     direct_chat: bool = False,
     shadow_observer=None,
+    quality_shadow_observer=None,
 ):
 
     @dp.message(Command("new"))
@@ -201,6 +204,20 @@ def register_chat(
                     shadow_observer(history, user_text, ai_draft, session_id=user_id)
                 except Exception:
                     logging.error("SHADOW_EVAL_FAIL post_delivery_hook_error")
+
+            if quality_shadow_observer is not None:
+                try:
+                    quality_shadow_observer(history, user_text, ai_draft, session_id=user_id)
+                except Exception:
+                    try:
+                        logging.error("QUALITY_SHADOW_EVAL_FAIL %s", json.dumps({
+                            "event": "QUALITY_SHADOW_EVAL_FAIL",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "mode": "quality_shadow",
+                            "evaluator_error_kind": "post_delivery_hook_error",
+                        }))
+                    except Exception:
+                        pass
 
         except Exception as exc:
             logging.exception(

@@ -229,6 +229,14 @@ def test_quality_modules_have_no_methodology_gold_runtime_or_network_imports():
         imports = [node for node in ast.walk(ast.parse(source)) if isinstance(node, (ast.Import, ast.ImportFrom))]
         names = [node.module or "" for node in imports if isinstance(node, ast.ImportFrom)]
         names += [alias.name for node in imports if isinstance(node, ast.Import) for alias in node.names]
+        # Runtime may reuse only the explicitly authorized DEV identity guard.
+        if path.name == "runtime.py":
+            method_imports = [node for node in imports if isinstance(node, ast.ImportFrom)
+                              and (node.module or "").startswith("services.evaluation")]
+            assert len(method_imports) == 1
+            assert method_imports[0].module == "services.evaluation.runtime"
+            assert [alias.name for alias in method_imports[0].names] == ["is_dev_runtime"]
+            names.remove("services.evaluation.runtime")
         assert not any(name.startswith(("services.evaluation", "openai", "urllib", "socket", "bot", "handlers")) for name in names)
         assert "coaching_evaluator_cases.json" not in source and "expected_result" not in source
 
