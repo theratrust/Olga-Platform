@@ -386,7 +386,7 @@ def test_chat_and_benchmark_both_import_shared_generator():
 
 def test_generator_call_ast_matches_pre_extraction_git_version():
     import subprocess
-    old = ast.parse(subprocess.check_output(["git","show","HEAD:handlers/chat.py"],cwd=ROOT).decode())
+    old = ast.parse(subprocess.check_output(["git","show","176cb07c0941ffb53c5d34f99e9cb86def6ada59^:handlers/chat.py"],cwd=ROOT).decode())
     shared = ast.parse((ROOT/"services/coaching_generator.py").read_text())
     def request(tree):
         return next(n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr == 'create')
