@@ -445,3 +445,40 @@ def test_explicit_model_and_token_overrides_recorded_without_config_mutation():
     assert report["metadata"]["quality"]["model"] == "explicit-quality"
     assert method_config.max_tokens == quality_config.max_tokens == 4000
     assert method_config.reasoning_effort == quality_config.reasoning_effort == "low"
+
+
+def test_shared_prompt_checks_history_before_question_or_hypothesis():
+    from prompts.coaching import DEFAULT_SYSTEM_PROMPT
+
+    instruction = coaching_generator.build_system_instruction(
+        first_name="Тест", archetype="Полутень"
+    )
+    history_rule = (
+        "Перед тем как задать вопрос или продолжить предположение, проверь историю разговора:\n"
+        "- не отвечала ли пользовательница на этот вопрос раньше;\n"
+        "- не отвергла ли она уже это предположение.\n"
+        "Не задавай уже отвеченный вопрос повторно и не возвращай отвергнутую гипотезу\n"
+        "как будто она всё ещё верна."
+    )
+    assert history_rule in DEFAULT_SYSTEM_PROMPT
+    assert history_rule in instruction
+
+
+@pytest.mark.parametrize("hard_rule", [
+    "Если человек говорит «я не знаю», не предлагай ему возможные состояния,\n"
+    "чувства, причины или варианты ответа даже в форме вопроса.",
+    "Не говори ему, что нужно делать.\n"
+    "Не выбирай за него правильное решение.\n"
+    "Не подменяй его поиск своим ответом.",
+    "Даже если человек прямо спрашивает: «Что мне делать?»,\n"
+    "не выбирай вместо него и не создавай список вариантов за него.",
+    "Не приписывай ему эмоции, мотивы, желания, причины,\n"
+    "черты личности или внутренние состояния, которых он сам не обозначил.",
+])
+def test_history_instruction_preserves_existing_hard_prompt_rules(hard_rule):
+    from prompts.coaching import DEFAULT_SYSTEM_PROMPT
+
+    assert hard_rule in DEFAULT_SYSTEM_PROMPT
+    assert hard_rule in coaching_generator.build_system_instruction(
+        first_name="Тест", archetype="Полутень"
+    )
