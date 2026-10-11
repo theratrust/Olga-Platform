@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.coaching_generator import build_system_instruction, build_messages, generate_candidate
+from services.coaching_generator import ExplicitTruncationError
 from services.conversation_state import build_carry_forward, render_runtime_memory
 from services.conversation_admission import admission_lock, private_message_marker
 from utils.telegram import split_long_text
@@ -132,7 +133,11 @@ def register_chat(
         logging.info("User acknowledgement sent")
 
         try:
-            ai_draft = await generate_candidate(ai_client, model_name, messages_payload)
+            try:
+                ai_draft = await generate_candidate(ai_client, model_name, messages_payload)
+            except ExplicitTruncationError:
+                logging.info("Generator retry attempt=2 reason=explicit_truncation")
+                ai_draft = await generate_candidate(ai_client, model_name, messages_payload)
             logging.info("OpenRouter response received")
 
             if not await is_active_conversation(user_id, conversation_id):

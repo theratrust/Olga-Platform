@@ -6,6 +6,10 @@ from services.generator_diagnostics import emit_diagnostic
 DEFAULT_MAX_TOKENS = 350
 
 
+class ExplicitTruncationError(RuntimeError):
+    """The provider explicitly ended a choice at the output limit."""
+
+
 def build_system_instruction(*, first_name, archetype):
     return build_coaching_prompt(first_name=first_name, archetype=archetype)
 
@@ -33,7 +37,10 @@ async def generate_candidate(ai_client, model_name, messages, *, max_tokens=DEFA
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "Olga Coaching Bot"},
         )
         call_succeeded = True
-        return response.choices[0].message.content
+        choice = response.choices[0]
+        if getattr(choice, "finish_reason", None) == "length":
+            raise ExplicitTruncationError("Provider reported finish_reason=length")
+        return choice.message.content
     except Exception as exc:
         error = exc
         raise

@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 import database
 from services.conversation_admission import admission_lock, private_message_marker
 from services.conversation_state import build_carry_forward
+from services.coaching_generator import ExplicitTruncationError, generate_candidate as real_generate_candidate
 
 
 @pytest.fixture
@@ -528,3 +529,162 @@ def test_moderated_statement_acknowledgement_and_draft_heading_are_neutral(pipel
     admin_text = p.bot.send_message.await_args.args[1]
     assert admin_text.startswith("📩 Новое сообщение от пользователя: ")
     assert "Новый вопрос" not in admin_text
+
+
+def test_explicit_truncation_retries_once_before_direct_send_and_history(pipeline, caplog):
+    p = pipeline
+    p.generated.side_effect = [ExplicitTruncationError(), "FINAL_ACCEPTED"]
+    incoming = message()
+    with caplog.at_level("INFO"):
+        run(p.coach(incoming, p.state))
+    assert p.generated.await_count == 2
+    first, second = p.generated.await_args_list
+    assert first.args == second.args and first.kwargs == second.kwargs
+    p.bot.send_message.assert_awaited_once_with(41, "FINAL_ACCEPTED")
+    cid = run(database.get_or_create_conversation_id(41))
+    assert run(database.get_recent_history(41, cid)) == [
+        {"role": "user", "content": "Вопрос."},
+        {"role": "assistant", "content": "FINAL_ACCEPTED"},
+    ]
+    assert "retry attempt=2 reason=explicit_truncation" in caplog.text
+    assert "FINAL_ACCEPTED" not in caplog.text
+
+
+@pytest.mark.parametrize("second", [
+    ExplicitTruncationError(),
+    RuntimeError("PRIVATE_PROVIDER_ERROR"),
+])
+def test_retry_failure_uses_existing_generic_path_without_direct_output(pipeline, second, caplog):
+    p = pipeline
+    p.generated.side_effect = [ExplicitTruncationError(), second]
+    incoming = message()
+    with caplog.at_level("INFO"):
+        run(p.coach(incoming, p.state))
+    assert p.generated.await_count == 2
+    assert p.generated.await_args_list[0].args == p.generated.await_args_list[1].args
+    p.bot.send_message.assert_not_awaited()
+    cid = run(database.get_or_create_conversation_id(41))
+    assert run(database.get_recent_history(41, cid)) == [{"role": "user", "content": "Вопрос."}]
+    assert incoming.answer.await_count == 2  # Existing acknowledgement, then generic failure.
+    assert "Произошла ошибка связи." in incoming.answer.await_args.args[0]
+    assert "PRIVATE_PROVIDER_ERROR" not in caplog.text
+
+
+def test_non_truncation_provider_exception_is_not_retried(pipeline):
+    p = pipeline
+    p.generated.side_effect = RuntimeError("PRIVATE_PROVIDER_ERROR")
+    incoming = message()
+    run(p.coach(incoming, p.state))
+    assert p.generated.await_count == 1
+    p.bot.send_message.assert_not_awaited()
+    assert "Произошла ошибка связи." in incoming.answer.await_args.args[0]
+
+
+def test_normal_direct_response_makes_one_call_and_one_history_entry(pipeline):
+    p = pipeline
+    run(p.coach(message(), p.state))
+    assert p.generated.await_count == 1
+    p.bot.send_message.assert_awaited_once_with(41, "Ответ.")
+    cid = run(database.get_or_create_conversation_id(41))
+    assert run(database.get_recent_history(41, cid)) == [
+        {"role": "user", "content": "Вопрос."},
+        {"role": "assistant", "content": "Ответ."},
+    ]
+
+
+def test_moderated_retry_stores_only_final_draft(pipeline):
+    p = pipeline
+    p.generated.side_effect = [ExplicitTruncationError(), "FINAL_DRAFT"]
+    drafts = AsyncMock(wraps=database.create_pending_draft)
+    coach = p.modules["chat"].register_chat(
+        p.dp, p.bot, object(), "offline", [99],
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
+        lambda user: "Тест", lambda user: "Тест",
+        database.add_chat_message, database.get_recent_history, drafts,
+        database.rotate_conversation, database.get_or_create_conversation_id,
+        database.is_active_conversation, direct_chat=False,
+        get_conversation_history_with_ids=database.get_conversation_history_with_ids,
+        admit_user_message=database.admit_user_message,
+    )
+    run(coach(message(), p.state))
+    assert p.generated.await_count == 2
+    assert p.generated.await_args_list[0].args == p.generated.await_args_list[1].args
+    drafts.assert_awaited_once()
+    assert drafts.await_args.args[3] == "FINAL_DRAFT"
+    with sqlite3.connect(p.db) as conn:
+        rows = conn.execute("SELECT ai_draft FROM pending_drafts").fetchall()
+    assert rows == [("FINAL_DRAFT",)]
+    assert p.bot.send_message.await_count == 1  # Admin draft only; no user delivery.
+    assert p.bot.send_message.await_args.args[0] == 99
+    assert "FINAL_DRAFT" in p.bot.send_message.await_args.args[1]
+
+
+def test_moderated_double_truncation_creates_no_draft(pipeline):
+    p = pipeline
+    p.generated.side_effect = [ExplicitTruncationError(), ExplicitTruncationError()]
+    drafts = AsyncMock(wraps=database.create_pending_draft)
+    coach = p.modules["chat"].register_chat(
+        p.dp, p.bot, object(), "offline", [99],
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
+        lambda user: "Тест", lambda user: "Тест",
+        database.add_chat_message, database.get_recent_history, drafts,
+        database.rotate_conversation, database.get_or_create_conversation_id,
+        database.is_active_conversation, direct_chat=False,
+        get_conversation_history_with_ids=database.get_conversation_history_with_ids,
+        admit_user_message=database.admit_user_message,
+    )
+    incoming = message()
+    run(coach(incoming, p.state))
+    assert p.generated.await_count == 2
+    drafts.assert_not_awaited()
+    p.bot.send_message.assert_not_awaited()
+    assert "Произошла ошибка связи." in incoming.answer.await_args.args[0]
+
+
+
+def test_provider_length_metadata_retries_identical_request_before_direct_delivery(pipeline, monkeypatch, caplog):
+    p = pipeline
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+            self.outputs = iter([
+                types.SimpleNamespace(choices=[types.SimpleNamespace(
+                    finish_reason="length",
+                    message=types.SimpleNamespace(content="PRIVATE_PARTIAL"),
+                )]),
+                types.SimpleNamespace(choices=[types.SimpleNamespace(
+                    finish_reason="stop",
+                    message=types.SimpleNamespace(content="FINAL_ONLY"),
+                )]),
+            ])
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self.create))
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return next(self.outputs)
+
+    client = FakeClient()
+    monkeypatch.setattr(p.modules["chat"], "generate_candidate", real_generate_candidate)
+    coach = p.modules["chat"].register_chat(
+        p.dp, p.bot, client, "fake-model", [],
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
+        lambda user: "Тест", lambda user: "Тест",
+        database.add_chat_message, database.get_recent_history, database.create_pending_draft,
+        database.rotate_conversation, database.get_or_create_conversation_id,
+        database.is_active_conversation, direct_chat=True,
+        get_conversation_history_with_ids=database.get_conversation_history_with_ids,
+        admit_user_message=database.admit_user_message,
+    )
+    with caplog.at_level("INFO"):
+        run(coach(message(), p.state))
+    assert len(client.calls) == 2
+    assert client.calls[0] == client.calls[1]
+    assert client.calls[0]["max_tokens"] == 350
+    p.bot.send_message.assert_awaited_once_with(41, "FINAL_ONLY")
+    cid = run(database.get_or_create_conversation_id(41))
+    assert run(database.get_recent_history(41, cid)) == [
+        {"role": "user", "content": "Вопрос."},
+        {"role": "assistant", "content": "FINAL_ONLY"},
+    ]
+    assert "PRIVATE_PARTIAL" not in caplog.text

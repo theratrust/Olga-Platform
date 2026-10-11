@@ -2,8 +2,10 @@
 
 The benchmark reports `empty_response` exactly when extraction returns `None`,
 `""`, or a string whose `strip()` is empty. Zero choices or a missing message/content
-field raises the original extraction exception instead. The generator does not
-inspect finish reason, usage, reasoning, refusal or tool calls to choose content.
+field raises the original extraction exception instead. The generator rejects only a parsed choice explicitly reporting
+finish_reason=length. Other finish reasons, including missing metadata, preserve
+the existing content extraction. Usage, reasoning, refusal and tool calls do not
+select alternate content.
 Historical benchmark artifacts discarded these fields, so the past four empty
 responses cannot be causally diagnosed from those artifacts alone.
 
@@ -11,10 +13,16 @@ responses cannot be causally diagnosed from those artifacts alone.
 projection once per shared generator invocation, including exceptions. Without an
 observer it emits nothing. Observer or metadata failures are contained; return
 identity, extraction exceptions and provider exception identity are preserved.
-No retry, alternate content extraction or reasoning-to-answer substitution occurs.
+The shared generator itself makes one call. The chat handler retries once only
+after explicit length termination, with the identical request, before direct
+delivery or moderated-draft creation. A second failure uses the existing generic
+error path. The diagnostic CLI has no retry; length termination now appears as
+a generator exception while its safe finish_reason_length signal is retained.
+There is no alternate content extraction or reasoning-to-answer substitution.
 The request, headers, model selection and default 350 token budget are unchanged.
 Existing SDK retry behavior is unchanged; diagnostics describe SDK invocations,
 not every underlying HTTP exchange.
+No punctuation, conjunction, quotation or other linguistic completeness test is used.
 
 Safe fields: provider call success; choice count/selected positional index; allowed
 finish reason; content field presence, static Python type, character length and

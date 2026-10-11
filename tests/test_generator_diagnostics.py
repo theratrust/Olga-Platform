@@ -11,7 +11,9 @@ from urllib import request
 import pytest
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
-from services.coaching_generator import generate_candidate, build_messages, DEFAULT_MAX_TOKENS
+from services.coaching_generator import (
+    ExplicitTruncationError, generate_candidate, build_messages, DEFAULT_MAX_TOKENS,
+)
 from services.generator_diagnostics import diagnostic_metadata
 from services.conversation_benchmark import BenchmarkConfig, load_scenarios
 
@@ -51,7 +53,6 @@ CASES=[
     (response("   "),None,["content_whitespace_only"]),
     (response(None),None,["content_null"]),
     (Obj(choices=[],model="fake-model"),IndexError,["zero_choices"]),
-    (response("",finish="length"),None,["content_empty_string","finish_reason_length"]),
     (response("",reasoning="PRIVATE_REASONING"),None,["reasoning_without_final_content"]),
     (Obj(choices=[Obj(message=Obj(),finish_reason="stop")]),AttributeError,["unexpected_response_shape"]),
     (APIConnectionError("PRIVATE_PROVIDER_ERROR SECRET"),APIConnectionError,["provider_call_failed"]),
@@ -88,6 +89,40 @@ def test_metadata_and_original_return_exception_equivalence(value,exception,sign
     text=json.dumps(record)
     for private in ["PRIVATE_CONTENT","PRIVATE_REASONING","PRIVATE_PROVIDER_ERROR","SECRET","PRIVATE_UNEXPECTED_CONTENT"]:
         assert private not in text
+
+
+
+@pytest.mark.parametrize("finish,content", [
+    ("stop", "Готово"),
+    (None, "Можно остановиться здесь"),
+    ("provider_specific", "Да"),
+    ("stop", "Или"),
+    ("stop", "«Открытая цитата"),
+])
+def test_non_length_finish_preserves_content_and_single_call(finish, content):
+    client = Client([response(content, finish=finish)])
+    assert asyncio.run(generate_candidate(client, "fake-model", [])) == content
+    assert len(client.calls) == 1
+    assert client.calls[0]["max_tokens"] == DEFAULT_MAX_TOKENS == 350
+
+
+def test_explicit_length_rejects_nonempty_content_and_keeps_safe_diagnostic():
+    client = Client([response("PRIVATE_PARTIAL", finish="length")])
+    records = []
+    with pytest.raises(ExplicitTruncationError, match="finish_reason=length"):
+        asyncio.run(generate_candidate(client, "fake-model", [], diagnostic_observer=records.append))
+    assert len(client.calls) == 1
+    assert records[0]["finish_reason"] == "length"
+    assert records[0]["content_character_length"] == len("PRIVATE_PARTIAL")
+    assert "finish_reason_length" in records[0]["signals"]
+    assert "PRIVATE_PARTIAL" not in json.dumps(records[0])
+
+
+def test_length_rejection_precedes_content_extraction():
+    choice = Obj(finish_reason="length", message=Obj())
+    client = Client([Obj(choices=[choice])])
+    with pytest.raises(ExplicitTruncationError):
+        asyncio.run(generate_candidate(client, "fake-model", []))
 
 
 @pytest.mark.parametrize("content,present,kind,length,white",[
@@ -189,7 +224,7 @@ def test_diagnostic_stops_first_failure_no_retry_history_or_raw_output(monkeypat
     assert client.calls[1]["messages"][1:]==[{"role":"user","content":scenario["turns"][0]},
         {"role":"assistant","content":"PRIVATE_CONTENT"},{"role":"user","content":scenario["turns"][1]}]
     failed=r["attempts"][-1]
-    assert failed["failure_kind"]=="empty_response" and "finish_reason_length" in failed["diagnostic"]["signals"]
+    assert failed["failure_kind"]=="generator_exception" and "finish_reason_length" in failed["diagnostic"]["signals"]
     for text in ["PRIVATE_CONTENT","PRIVATE_REASONING","SECRET",*scenario["turns"]]:assert text not in json.dumps(r,ensure_ascii=False)
 
 
