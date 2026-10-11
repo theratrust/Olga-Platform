@@ -193,6 +193,177 @@ def test_memory_is_separate_system_data_and_baseline_is_unchanged():
     assert "не предлагай ему возможные состояния" in DEFAULT_SYSTEM_PROMPT
 
 
+def _answered_correction_rows(correction="Я уже отвечала на это.", *, old=False):
+    messages = [
+        ("user", "Хочу рассказать о своём дне."),
+        ("assistant", "Что для тебя значит «своё»?"),
+        ("user", "Самой выбирать, как устроен день."),
+        ("assistant", "А что для тебя значит «своё»?"),
+        ("user", correction),
+    ]
+    if old:
+        messages.extend(
+            ("assistant" if i % 2 else "user", f"Нейтральная реплика {i}.")
+            for i in range(20)
+        )
+    items = rows(*messages)
+    recent = [{"role": row["role"], "content": row["content"]} for row in items[-20:]]
+    return items, recent
+
+
+@pytest.mark.parametrize("old", [False, True])
+def test_explicit_answered_correction_is_source_linked_in_both_windows(old):
+    items, recent = _answered_correction_rows(old=old)
+    original = copy.deepcopy(items)
+    found = build_carry_forward(items, recent)
+    assert found == [{
+        "source_message_id": 5,
+        "event_type": "already_answered_user_correction",
+        "assistant_message_id": 4,
+        "assistant_quote": "А что для тебя значит «своё»?",
+        "user_quote": "Я уже отвечала на это",
+    }]
+    block = render_runtime_memory(found)
+    assert "Не задавай новый вопрос только ради" in block
+    assert "Конкретное новое уточнение допустимо" in block
+    assert items == original
+    assert "Самой выбирать, как устроен день." not in block
+
+
+def test_recent_and_old_answered_correction_render_identically():
+    recent_rows, recent = _answered_correction_rows()
+    old_rows, old_history = _answered_correction_rows(old=True)
+    assert render_runtime_memory(build_carry_forward(recent_rows, recent)) == render_runtime_memory(
+        build_carry_forward(old_rows, old_history)
+    )
+
+
+@pytest.mark.parametrize("correction,phrase", [
+    ("Я уже ответила.", "Я уже ответила"),
+    ("Я уже это говорила.", "Я уже это говорила"),
+    ("Я это уже говорила.", "Я это уже говорила"),
+    ("Я уже сказала об этом.", "Я уже сказала об этом"),
+    ("Я тебе уже говорила.", "Я тебе уже говорила"),
+    ("Я уже обсуждала это.", "Я уже обсуждала это"),
+    ("Мы уже обсуждали это.", "Мы уже обсуждали это"),
+    ("Я уже говорила: самой выбирать, как устроен день.", "Я уже говорила"),
+])
+def test_explicit_correction_forms_do_not_store_answer_content(correction, phrase):
+    items, recent = _answered_correction_rows(correction)
+    found = build_carry_forward(items, recent)
+    assert found[0]["event_type"] == "already_answered_user_correction"
+    assert found[0]["user_quote"] == phrase
+    assert "Самой выбирать, как устроен день." not in render_runtime_memory(found)
+
+
+@pytest.mark.parametrize("reply", [
+    "Не знаю.", "Не хочу отвечать.", "Нет.", "Давай поговорим о другом.",
+    "Нет, это не про страх зависимости.",
+])
+def test_non_answered_corrections_do_not_create_answered_event(reply):
+    items, recent = _answered_correction_rows(reply)
+    found = build_carry_forward(items, recent)
+    assert all(item["event_type"] != "already_answered_user_correction" for item in found)
+
+
+def test_explicit_correction_needs_immediately_preceding_identifiable_question():
+    for messages in [
+        [("user", "Я уже отвечала на это.")],
+        [("user", "Привет."), ("assistant", "Расскажи подробнее."), ("user", "Я уже отвечала на это.")],
+        [("user", "Привет."), ("assistant", "Возможно, ты боишься зависимости?"),
+         ("user", "Я уже отвечала на это.")],
+        [("user", "Привет."), ("assistant", "Что ты хочешь? И почему?"),
+         ("user", "Я уже отвечала на это.")],
+    ]:
+        items = rows(*messages)
+        recent = [{"role": row["role"], "content": row["content"]} for row in items]
+        assert all(
+            item["event_type"] != "already_answered_user_correction"
+            for item in build_carry_forward(items, recent)
+        )
+
+
+def test_repeated_answer_fixture_shape_has_explicit_correction_context():
+    fixture = json.loads((ROOT / "tests/fixtures/turn_selection_cases.json").read_text())
+    case = next(case for case in fixture["cases"] if case["id"] == "repeated_answer")
+    messages = [("user", "Начало разговора.")] + [
+        (part["role"], part["content"]) for part in case["context"]
+    ] + [("user", case["latest_user"])]
+    items = rows(*messages)
+    recent = [{"role": row["role"], "content": row["content"]} for row in items]
+    found = build_carry_forward(items, recent)
+    assert len(found) == 1
+    assert found[0]["event_type"] == "already_answered_user_correction"
+    assert found[0]["assistant_message_id"] == 4
+    assert "самой выбирать" not in found[0]["user_quote"].lower()
+
+
+def test_answered_correction_shares_existing_four_item_cap():
+    forms = [
+        "Я уже отвечала на это.", "Я уже ответила.", "Я уже это говорила.",
+        "Я уже сказала об этом.", "Я это уже говорила.",
+    ]
+    messages = [("user", "Начало разговора.")]
+    for form in forms:
+        messages.extend([("assistant", "Что для тебя важно?"), ("user", form)])
+    items = rows(*messages)
+    recent = [{"role": row["role"], "content": row["content"]} for row in items]
+    found = build_carry_forward(items, recent)
+    assert len(found) == 4
+    assert [item["source_message_id"] for item in found] == [5, 7, 9, 11]
+
+
+def test_answered_correction_coexists_with_rejected_hypothesis_without_reclassification():
+    items = rows(
+        ("user", "Хочу рассказать о работе."),
+        ("assistant", "Возможно, ты боишься зависимости?"),
+        ("user", "Нет, это не про страх зависимости."),
+        ("assistant", "Что для тебя сейчас важно?"),
+        ("user", "Я уже отвечала на это."),
+    )
+    recent = [{"role": row["role"], "content": row["content"]} for row in items]
+    found = build_carry_forward(items, recent)
+    assert [item["event_type"] for item in found] == [
+        "rejected_assistant_hypothesis", "already_answered_user_correction"
+    ]
+    block = render_runtime_memory(found)
+    assert "не возвращаться" in block
+    assert "Не задавай новый вопрос только ради" in block
+    assert "страх зависимости" not in found[1]["user_quote"]
+
+
+def test_identical_correction_to_distinct_questions_keeps_both_source_links():
+    items = rows(
+        ("user", "Начало разговора."),
+        ("assistant", "Что для тебя значит «своё»?"),
+        ("user", "Я уже отвечала на это."),
+        ("assistant", "Что для тебя важно сейчас?"),
+        ("user", "Я уже отвечала на это."),
+    )
+    recent = [{"role": row["role"], "content": row["content"]} for row in items]
+    found = build_carry_forward(items, recent)
+    assert [item["assistant_message_id"] for item in found] == [2, 4]
+
+
+def test_no_correction_keeps_generator_input_byte_equivalent():
+    history = [{"role": "user", "content": "Я не знаю."}]
+    items = rows(("user", "Я не знаю."))
+    assert build_carry_forward(items, history) == []
+    assert build_messages(DEFAULT_SYSTEM_PROMPT, history, runtime_memory=render_runtime_memory([])) == (
+        build_messages(DEFAULT_SYSTEM_PROMPT, history)
+    )
+    assert DEFAULT_MAX_TOKENS == 350
+    assert "Если человек говорит «я не знаю»" in DEFAULT_SYSTEM_PROMPT
+
+
+def test_later_user_statement_has_priority_without_topic_ban():
+    items, recent = _answered_correction_rows()
+    found = build_carry_forward(items, recent)
+    block = render_runtime_memory(found)
+    assert "не постоянный запрет темы" in block
+    assert "более поздние явные слова пользователя" in block
+
+
 def _chat_module(monkeypatch):
     class Expression:
         def __getattr__(self, name): return self
