@@ -1,0 +1,677 @@
+{
+  "schema_version": "1.0",
+  "synthetic": true,
+  "provenance": "derived_turn_selection_fixture",
+  "cases": [
+    {
+      "id": "emotional_new",
+      "context": [],
+      "latest_user": "Мне очень тяжело на новой работе.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "A specific clarification could help, but a brief grounded acknowledgement is complete here.",
+      "must": [
+        "Stay with the stated difficulty; a short reflection without a question is acceptable.",
+        "If asking, use at most one specific non-leading question."
+      ],
+      "must_not": [
+        "Infer a hidden cause or named feeling.",
+        "Append a generic feeling question automatically."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI10"
+      ],
+      "pair_id": "emotional_answered"
+    },
+    {
+      "id": "emotional_answered",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я недавно устроилась на новую работу."
+        },
+        {
+          "role": "assistant",
+          "content": "Что в ней самое тяжёлое?"
+        },
+        {
+          "role": "user",
+          "content": "Ночные смены — самое тяжёлое."
+        }
+      ],
+      "latest_user": "Мне очень тяжело на новой работе.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "The earlier exchange already identifies night shifts; repeating what is hardest would ignore that answer.",
+      "must": [
+        "Acknowledge the previously named night shifts without assigning another cause.",
+        "A brief reflection may stand alone."
+      ],
+      "must_not": [
+        "Ask again what is hardest.",
+        "Treat the answer as unknown or offer possible causes."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI08",
+        "O-AI09"
+      ],
+      "pair_id": "emotional_answered"
+    },
+    {
+      "id": "referent_clear",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера сестра слушала меня без советов."
+        }
+      ],
+      "latest_user": "Это было по-другому.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "The only referenced event is the conversation with her sister; a short reflection can suffice.",
+      "must": [
+        "Keep the known referent and her wording.",
+        "A specific clarification about what differed is allowed, not required."
+      ],
+      "must_not": [
+        "Invent why the sister behaved differently.",
+        "Ask a generic unrelated question."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12"
+      ],
+      "pair_id": "referent_added_event"
+    },
+    {
+      "id": "referent_ambiguous",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера сестра слушала меня без советов, а потом я поговорила с начальником."
+        }
+      ],
+      "latest_user": "Это было по-другому.",
+      "classification": "QUESTION_USEFUL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "One added event makes “это” ambiguous; asking which encounter she means resolves a concrete referent.",
+      "must": [
+        "If asking, clarify which of the two encounters she means.",
+        "Keep both possible referents unasserted."
+      ],
+      "must_not": [
+        "Choose the sister or manager for her.",
+        "Infer a motive from the ambiguity."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI08"
+      ],
+      "pair_id": "referent_added_event"
+    },
+    {
+      "id": "work_excluded",
+      "context": [],
+      "latest_user": "Работу я пока не хочу обсуждать.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "The user explicitly excludes work as the current focus; a work question would reopen it.",
+      "must": [
+        "Accept the present boundary without treating it as permanent.",
+        "Allow her to choose another focus or pause."
+      ],
+      "must_not": [
+        "Ask what job she should seek.",
+        "Treat work as the solution or offer substitute work."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI09",
+        "O-M11"
+      ],
+      "pair_id": "work_polarity"
+    },
+    {
+      "id": "work_invited",
+      "context": [],
+      "latest_user": "Работу я хочу обсудить.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "Changing only the user’s stated willingness makes work a permissible topic, not a mandated plan.",
+      "must": [
+        "Stay with her invitation to discuss work.",
+        "A single open clarification is acceptable; acknowledgement without a question is also acceptable."
+      ],
+      "must_not": [
+        "Recommend a job or change automatically.",
+        "Infer that work will solve another issue."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-M11"
+      ],
+      "pair_id": "work_polarity"
+    },
+    {
+      "id": "hypothesis_still_rejected",
+      "context": [
+        {
+          "role": "user",
+          "content": "Мне бывает одиноко."
+        },
+        {
+          "role": "assistant",
+          "content": "Возможно, ты боишься одиночества?"
+        },
+        {
+          "role": "user",
+          "content": "Нет, я не боюсь одиночества."
+        }
+      ],
+      "latest_user": "Нет, я всё ещё не боюсь одиночества.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "The user maintains her explicit rejection; a question about the same fear would press the assistant’s idea.",
+      "must": [
+        "Accept the correction as stated.",
+        "If continuing, stay with her own wording without a new explanation."
+      ],
+      "must_not": [
+        "Rephrase or defend the fear hypothesis.",
+        "Treat rejection as resistance or confirmation."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M07",
+        "O-M08",
+        "O-AI05",
+        "O-AI09"
+      ],
+      "pair_id": "hypothesis_user_reopens"
+    },
+    {
+      "id": "hypothesis_user_reopens",
+      "context": [
+        {
+          "role": "user",
+          "content": "Мне бывает одиноко."
+        },
+        {
+          "role": "assistant",
+          "content": "Возможно, ты боишься одиночества?"
+        },
+        {
+          "role": "user",
+          "content": "Нет, я не боюсь одиночества."
+        }
+      ],
+      "latest_user": "Хотя теперь одиночество меня пугает.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "Only the latest user stance changes; she herself reopens the idea, so the old rejection is not a permanent ban.",
+      "must": [
+        "Give her latest explicit words priority.",
+        "A brief reflection or one non-leading question about her current meaning is acceptable."
+      ],
+      "must_not": [
+        "Say the assistant was right all along.",
+        "Treat the former rejection as resistance."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M07",
+        "O-M08",
+        "O-AI05",
+        "O-AI09"
+      ],
+      "pair_id": "hypothesis_user_reopens"
+    },
+    {
+      "id": "direct_question_open",
+      "context": [
+        {
+          "role": "user",
+          "content": "Мне сложно решить, оставаться ли на работе."
+        }
+      ],
+      "latest_user": "Что мне делать?",
+      "classification": "QUESTION_USEFUL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "Her decision criteria are not yet named; one specific question can return authorship without offering options.",
+      "must": [
+        "Respond to the request and keep the choice hers.",
+        "If asking, seek her own relevant criterion rather than propose a choice."
+      ],
+      "must_not": [
+        "Give a ready-made decision.",
+        "Offer a menu of jobs or feelings disguised as a question."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M05",
+        "O-M10",
+        "O-AI08"
+      ],
+      "pair_id": "direct_question_constraint"
+    },
+    {
+      "id": "direct_question_constraint",
+      "context": [
+        {
+          "role": "user",
+          "content": "Мне сложно решить, оставаться ли на работе."
+        }
+      ],
+      "latest_user": "Что мне делать? Я уже сказала, что хочу остаться и сократить смены.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "The added clause names her own preferred direction; another question is not needed to repeat the choice.",
+      "must": [
+        "Acknowledge the stated wish to stay and reduce shifts.",
+        "A focused clarification is allowed; a concise response without a question is also acceptable."
+      ],
+      "must_not": [
+        "Ask again whether she wants to stay.",
+        "Turn her preference into a bot-prescribed plan."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI08",
+        "O-AI09"
+      ],
+      "pair_id": "direct_question_constraint"
+    },
+    {
+      "id": "uncertainty_plain",
+      "context": [
+        {
+          "role": "assistant",
+          "content": "Чего ты сейчас хочешь?"
+        }
+      ],
+      "latest_user": "Я не знаю.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "No new content justifies another question after the unanswered one.",
+      "must": [
+        "Preserve uncertainty and allow no immediate answer.",
+        "A short response without a question is acceptable."
+      ],
+      "must_not": [
+        "Suggest candidate feelings, reasons, states, answers, or options.",
+        "Use multiple choice or a new question to force an answer.",
+        "Infer a diagnosis or resistance."
+      ],
+      "source_ids": [
+        "O-M05",
+        "O-M06",
+        "O-M12",
+        "O-AI03",
+        "O-AI08"
+      ],
+      "pair_id": "uncertainty_scope"
+    },
+    {
+      "id": "uncertainty_want",
+      "context": [
+        {
+          "role": "assistant",
+          "content": "Чего ты сейчас хочешь?"
+        }
+      ],
+      "latest_user": "Я не знаю, чего хочу.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "Naming the object of uncertainty does not license candidate desires or a repeated “what do you want?” question.",
+      "must": [
+        "Preserve uncertainty and allow no immediate answer.",
+        "A short response without a question is acceptable."
+      ],
+      "must_not": [
+        "Suggest candidate feelings, reasons, states, answers, or options.",
+        "Use multiple choice or a new question to force an answer.",
+        "Infer a diagnosis or resistance."
+      ],
+      "source_ids": [
+        "O-M05",
+        "O-M06",
+        "O-M12",
+        "O-AI03",
+        "O-AI08"
+      ],
+      "pair_id": "uncertainty_scope"
+    },
+    {
+      "id": "uncertainty_rejects_fear",
+      "context": [
+        {
+          "role": "assistant",
+          "content": "Возможно, это страх перемен?"
+        }
+      ],
+      "latest_user": "Я не знаю. И это точно не про страх.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "Uncertainty remains, and the user explicitly excludes the offered fear account.",
+      "must": [
+        "Accept the explicit “not fear” boundary.",
+        "Leave the unknown answer open without another immediate question."
+      ],
+      "must_not": [
+        "Offer candidate feelings, reasons, states, answers, options, or diagnoses.",
+        "Reframe fear as hidden resistance or ask a forced-choice question."
+      ],
+      "source_ids": [
+        "O-M05",
+        "O-M06",
+        "O-M08",
+        "O-AI03",
+        "O-AI05"
+      ]
+    },
+    {
+      "id": "short_factual_answer",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я недавно перешла в новый отдел."
+        },
+        {
+          "role": "assistant",
+          "content": "Как давно ты там работаешь?"
+        }
+      ],
+      "latest_user": "Три месяца.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "She has answered the duration question; a new question needs a distinct, concrete purpose.",
+      "must": [
+        "Retain the three-month fact.",
+        "Acknowledge it without a question, or clarify a new user-relevant detail if needed."
+      ],
+      "must_not": [
+        "Ask again how long she has been there.",
+        "Treat shortness as evidence of reluctance."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI08",
+        "O-AI09"
+      ]
+    },
+    {
+      "id": "rich_reflection",
+      "context": [],
+      "latest_user": "Я замечаю: мне нравится готовить дома, но я не хочу превращать это в работу. Мне важно оставить это своим занятием.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "She has already articulated the relevant distinction; movement does not require another question.",
+      "must": [
+        "Preserve the distinction between enjoyment and employment.",
+        "A short reflection without a question is acceptable."
+      ],
+      "must_not": [
+        "Recommend earning money from cooking.",
+        "Ask a generic feeling question or force a next step."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI08",
+        "O-AI10",
+        "O-M11"
+      ]
+    },
+    {
+      "id": "repeated_answer",
+      "context": [
+        {
+          "role": "assistant",
+          "content": "Что для тебя значит «своё»?"
+        },
+        {
+          "role": "user",
+          "content": "Самой выбирать, как устроен день."
+        },
+        {
+          "role": "assistant",
+          "content": "А что для тебя значит «своё»?"
+        }
+      ],
+      "latest_user": "Я уже говорила: самой выбирать, как устроен день.",
+      "classification": "QUESTION_AVOID",
+      "question_allowed": false,
+      "question_required": false,
+      "question_prohibited": true,
+      "rationale": "The user has answered and now flags repetition; a third version of the same question adds no information.",
+      "must": [
+        "Recognize the already given meaning.",
+        "A brief acknowledgement or accurate reflection is enough."
+      ],
+      "must_not": [
+        "Repeat the question or paraphrase it.",
+        "Infer that repetition signals resistance."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI08",
+        "O-AI09",
+        "O-AI10"
+      ]
+    },
+    {
+      "id": "topic_changed",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я рассказывала о работе."
+        },
+        {
+          "role": "assistant",
+          "content": "Что в работе хочется изменить?"
+        }
+      ],
+      "latest_user": "Теперь хочу поговорить о сестре.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "The user changes focus explicitly; a new question may clarify the sister topic, but is not obligatory.",
+      "must": [
+        "Follow the new topic.",
+        "Acknowledge the shift or ask one non-leading question about what she wants to discuss."
+      ],
+      "must_not": [
+        "Continue asking about work.",
+        "Infer why she changed subjects."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M12",
+        "O-AI09"
+      ]
+    },
+    {
+      "id": "partner_not_problem",
+      "context": [],
+      "latest_user": "Муж говорит, что я могу не работать. Я хочу понять, как сама к этому отношусь.",
+      "classification": "QUESTION_OPTIONAL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "His suggestion does not establish control or blame; her own view is the stated focus.",
+      "must": [
+        "Keep his words separate from her response.",
+        "A brief reflection or one question about her own wording is acceptable."
+      ],
+      "must_not": [
+        "Frame him as the problem.",
+        "Push work or leaving the relationship as the solution."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M07",
+        "O-M10",
+        "O-M11",
+        "O-AI09"
+      ]
+    },
+    {
+      "id": "unresolved_referent",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера было два разговора: с сестрой и с начальником."
+        }
+      ],
+      "latest_user": "После этого стало иначе.",
+      "classification": "QUESTION_USEFUL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "“После этого” could refer to either conversation; clarifying the concrete referent avoids inventing context.",
+      "must": [
+        "If asking, clarify which conversation she means.",
+        "Keep both possibilities open until she answers."
+      ],
+      "must_not": [
+        "Choose an event for her.",
+        "Invent an emotional or causal account."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI08"
+      ]
+    },
+    {
+      "id": "partner_own_distinction",
+      "context": [
+        {
+          "role": "user",
+          "content": "Муж считает, что мне пора вернуться к работе."
+        }
+      ],
+      "latest_user": "Мне важно различить его мнение и своё, но я пока не понимаю, что называю «своим».",
+      "classification": "QUESTION_USEFUL",
+      "question_allowed": true,
+      "question_required": false,
+      "question_prohibited": false,
+      "rationale": "The user herself names an unclear distinction; a question about her meaning of “своим” is grounded and new.",
+      "must": [
+        "If asking, clarify her own term “своим”.",
+        "Her view and his opinion remain distinct."
+      ],
+      "must_not": [
+        "Cast him as controlling without evidence.",
+        "Offer work as the answer or candidate feelings."
+      ],
+      "source_ids": [
+        "O-M04",
+        "O-M07",
+        "O-M10",
+        "O-M11",
+        "O-AI08"
+      ]
+    }
+  ],
+  "contrastive_pairs": [
+    {
+      "id": "emotional_answered",
+      "case_ids": [
+        "emotional_new",
+        "emotional_answered"
+      ],
+      "changed_detail": "Only the prior answered exchange about night shifts is added; latest user wording stays identical."
+    },
+    {
+      "id": "referent_added_event",
+      "case_ids": [
+        "referent_clear",
+        "referent_ambiguous"
+      ],
+      "changed_detail": "One additional encounter with a manager makes the same “это” ambiguous."
+    },
+    {
+      "id": "work_polarity",
+      "case_ids": [
+        "work_excluded",
+        "work_invited"
+      ],
+      "changed_detail": "Only the user’s willingness to discuss work changes."
+    },
+    {
+      "id": "hypothesis_user_reopens",
+      "case_ids": [
+        "hypothesis_still_rejected",
+        "hypothesis_user_reopens"
+      ],
+      "changed_detail": "Only the later user stance changes from maintaining refusal to reopening the idea."
+    },
+    {
+      "id": "direct_question_constraint",
+      "case_ids": [
+        "direct_question_open",
+        "direct_question_constraint"
+      ],
+      "changed_detail": "Only the added user-authored preference to stay and reduce shifts changes what remains open."
+    },
+    {
+      "id": "uncertainty_scope",
+      "case_ids": [
+        "uncertainty_plain",
+        "uncertainty_want"
+      ],
+      "changed_detail": "Only the object of uncertainty is specified; the hard boundary remains."
+    }
+  ]
+}
