@@ -2,6 +2,7 @@ from aiogram import Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from services.conversation_admission import is_private_coaching_chat
 
 
 def register_start(
@@ -12,6 +13,8 @@ def register_start(
 
     @dp.message(Command("start"))
     async def cmd_start(message: types.Message, state: FSMContext):
+        if not is_private_coaching_chat(message.chat, message.from_user.id):
+            return
 
         await state.clear()
 

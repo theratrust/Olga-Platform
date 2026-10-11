@@ -1,5 +1,6 @@
 """Offline SQLite checks for the DEV logical conversation fence."""
 import asyncio
+from itertools import count
 import sqlite3
 import sys
 from pathlib import Path
@@ -25,6 +26,13 @@ def db(monkeypatch, tmp_path):
 
 def run(coro):
     return asyncio.run(coro)
+
+
+_reset_messages = count(1000)
+
+
+async def reset(user_id):
+    return await database.rotate_conversation(user_id, user_id, next(_reset_messages))
 
 
 def test_first_use_is_stable_db_id_and_users_are_isolated(db):
@@ -61,7 +69,7 @@ def test_new_rotates_deletes_rows_and_drafts_and_rejects_late_a_write(db):
         assert await database.add_chat_message(41, "A", "", "user", "A turn", a)
         draft = await database.create_pending_draft(41, "A", "A turn", "A answer", a)
         assert draft
-        b = await database.rotate_conversation(41)
+        b = await reset(41)
         assert b != a
         assert await database.get_or_create_conversation_id(41) == b
         assert await database.get_recent_history(41, b, limit=20) == []
@@ -79,7 +87,7 @@ def test_ledger_and_history_require_both_user_and_conversation(db):
     async def scenario():
         a = await database.get_or_create_conversation_id(41)
         assert await database.add_chat_message(41, "A", "", "user", "Не хочу возвращаться к этой теме.", a)
-        b = await database.rotate_conversation(41)
+        b = await reset(41)
         # Deliberately retain an A-tagged fixture row to prove filters, independent of deletion.
         with sqlite3.connect(db) as conn:
             conn.execute(
@@ -100,8 +108,8 @@ def test_ledger_and_history_require_both_user_and_conversation(db):
 def test_two_rapid_new_commands_leave_only_latest_id(db):
     async def scenario():
         a = await database.get_or_create_conversation_id(41)
-        b = await database.rotate_conversation(41)
-        c = await database.rotate_conversation(41)
+        b = await reset(41)
+        c = await reset(41)
         assert len({a, b, c}) == 3
         assert await database.get_or_create_conversation_id(41) == c
         assert not await database.add_chat_message(41, "A", "", "assistant", "A", a)
@@ -120,7 +128,7 @@ def test_pending_draft_approval_is_bound_to_active_id(db):
         assert not await database.save_approved_draft_message(draft, "N/A", "answer", "APPROVED")
         assert await database.get_recent_history(41, cid) == [{"role": "assistant", "content": "answer"}]
         stale = await database.create_pending_draft(41, "A", "later", "later answer", cid)
-        await database.rotate_conversation(41)
+        await reset(41)
         assert not await database.is_pending_draft_active(stale)
         assert not await database.save_approved_draft_message(stale, "N/A", "later answer", "APPROVED")
     run(scenario())
@@ -144,7 +152,7 @@ def test_legacy_null_rows_and_drafts_fail_closed_on_repeatable_upgrade(monkeypat
         assert not await database.save_approved_draft_message(1, "N/A", "legacy answer", "APPROVED")
         assert await database.add_chat_message(41, "A", "", "user", "new", cid)
         assert [m["content"] for m in await database.get_recent_history(41, cid)] == ["new"]
-        await database.rotate_conversation(41)
+        await reset(41)
     run(scenario())
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM chat_messages WHERE user_id = 41").fetchone()[0] == 0
@@ -215,7 +223,7 @@ def test_admin_approve_rejects_stale_draft_before_send(db, monkeypatch):
 
     async def scenario():
         old = await database.get_or_create_conversation_id(41)
-        await database.rotate_conversation(41)
+        await reset(41)
         # Simulate a legacy/stale draft surviving from an older writer.
         with sqlite3.connect(db) as conn:
             cursor = conn.execute(
@@ -413,7 +421,7 @@ def test_new_rolls_back_identity_and_deletes_on_middle_failure(db):
             BEGIN SELECT RAISE(ABORT, 'fixture failure'); END
         """)
     with pytest.raises(sqlite3.DatabaseError, match="fixture failure"):
-        run(database.rotate_conversation(41))
+        run(reset(41))
 
     async def verify_rollback():
         assert await database.get_or_create_conversation_id(41) == a
@@ -426,7 +434,7 @@ def test_new_rolls_back_identity_and_deletes_on_middle_failure(db):
     run(verify_rollback())
     with sqlite3.connect(db) as conn:
         conn.execute("DROP TRIGGER fail_pending_delete")
-    b = run(database.rotate_conversation(41))
+    b = run(reset(41))
     assert b != a
     assert run(database.get_recent_history(41, b, limit=20)) == []
     assert run(database.get_pending_draft(draft)) is None
@@ -438,9 +446,9 @@ def test_two_users_and_rapid_new_keep_writes_and_drafts_scoped(db):
         y = await database.get_or_create_conversation_id(42)
         a_draft = await database.create_pending_draft(41, "A", "A", "A answer", a)
         y_draft = await database.create_pending_draft(42, "Y", "Y", "Y answer", y)
-        b = await database.rotate_conversation(41)
+        b = await reset(41)
         b_draft = await database.create_pending_draft(41, "A", "B", "B answer", b)
-        c = await database.rotate_conversation(41)
+        c = await reset(41)
         assert len({a, b, c, y}) == 4
         assert await database.get_or_create_conversation_id(42) == y
         assert not await database.add_chat_message(41, "A", "", "assistant", "A", a)

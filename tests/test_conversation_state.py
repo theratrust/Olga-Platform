@@ -1,5 +1,6 @@
 """Offline tests of the narrow, source-linked conversation carry-forward."""
 import asyncio
+from itertools import count
 import copy
 import importlib.util
 import json
@@ -11,6 +12,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+
+_message_counter = count(1)
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -240,7 +243,7 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
 
     async def get_id(user_id): return active[user_id]
     async def is_active(user_id, cid): return active[user_id] == cid
-    async def rotate(user_id):
+    async def rotate(user_id, *_marker):
         storage[user_id].clear()
         active[user_id] += "-new"
         return active[user_id]
@@ -250,6 +253,10 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
         next_id = entries[-1]["id"] + 1 if entries else 1
         entries.append({"id": next_id, "role": role, "content": content})
         return True
+    async def admit(user_id, name, username, content, _chat_id, _message_id):
+        cid = await get_id(user_id)
+        assert await add(user_id, name, username, "user", content, cid)
+        return cid, None
     async def recent(user_id, cid, limit):
         assert cid == active[user_id] and limit == 20
         return [{"role": x["role"], "content": x["content"]} for x in storage[user_id][-limit:]]
@@ -261,6 +268,7 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
         dp, bot, client, "fake", [], types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
         lambda user: "Тест", lambda user: "Тест", add, recent, AsyncMock(), rotate,
         get_id, is_active, direct_chat=True, get_conversation_history_with_ids=full,
+        admit_user_message=admit,
     )
     state = types.SimpleNamespace(
         get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}),
@@ -270,7 +278,7 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
     def message(user_id, content):
         return types.SimpleNamespace(
             from_user=types.SimpleNamespace(id=user_id, username=None),
-            chat=types.SimpleNamespace(id=user_id), text=content, answer=AsyncMock(),
+            chat=types.SimpleNamespace(id=user_id, type="private"), message_id=next(_message_counter), text=content, answer=AsyncMock(),
         )
 
     async def scenario():
@@ -331,6 +339,7 @@ def _real_pipeline(monkeypatch, tmp_path):
         database.rotate_conversation, database.get_or_create_conversation_id,
         database.is_active_conversation, direct_chat=True,
         get_conversation_history_with_ids=database.get_conversation_history_with_ids,
+        admit_user_message=database.admit_user_message,
     )
     state = types.SimpleNamespace(
         get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}),
@@ -341,7 +350,7 @@ def _real_pipeline(monkeypatch, tmp_path):
     def message(user_id, content):
         return types.SimpleNamespace(
             from_user=types.SimpleNamespace(id=user_id, username=None),
-            chat=types.SimpleNamespace(id=user_id), text=content, answer=AsyncMock(),
+            chat=types.SimpleNamespace(id=user_id, type="private"), message_id=next(_message_counter), text=content, answer=AsyncMock(),
         )
 
     async def ask(user_id, content):

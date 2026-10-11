@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.coaching_generator import build_system_instruction, build_messages, generate_candidate
 from services.conversation_state import build_carry_forward, render_runtime_memory
+from services.conversation_admission import admission_lock, private_message_marker
 from utils.telegram import split_long_text
 
 
@@ -31,18 +32,29 @@ def register_chat(
     shadow_observer=None,
     quality_shadow_observer=None,
     get_conversation_history_with_ids=None,
+    admit_user_message=None,
 ):
+    if admit_user_message is None:
+        raise ValueError("Atomic user admission is required")
 
     @dp.message(Command("new"))
     async def cmd_new(
         message: types.Message,
         state: FSMContext,
     ):
+        marker = private_message_marker(message)
+        if marker is None:
+            # Non-private coaching commands are ignored without changing FSM or DB.
+            logging.info("ADMISSION_REJECTED_INCOMPARABLE operation=new")
+            return
         user_id = message.from_user.id
-
-        conversation_id = await rotate_conversation(user_id)
-        await state.set_state(state_cls.AI_CHAT)
-        await state.update_data(shadow_conversation_id=conversation_id)
+        async with admission_lock(user_id):
+            conversation_id = await rotate_conversation(user_id, *marker)
+            if conversation_id is None:
+                logging.info("ADMISSION_REJECTED_STALE operation=new")
+                return
+            await state.set_state(state_cls.AI_CHAT)
+            await state.update_data(shadow_conversation_id=conversation_id)
 
         await message.answer(
             "Начинаем новый разговор. Предыдущая история очищена.\n\n"
@@ -53,12 +65,11 @@ def register_chat(
         message: types.Message,
         state: FSMContext,
     ):
-        user_id = message.from_user.id
-
-        current_state = await state.get_state()
-        if current_state != state_cls.AI_CHAT.state:
+        marker = private_message_marker(message)
+        if marker is None:
+            logging.info("ADMISSION_REJECTED_INCOMPARABLE operation=user")
             return
-
+        user_id = message.from_user.id
         user_text = message.text
         full_name = get_user_display_name(message.from_user)
         first_name = get_user_first_name(message.from_user)
@@ -68,21 +79,19 @@ def register_chat(
             else "без username"
         )
 
-        # Capture DB identity before any await that can overlap /new.
-        conversation_id = await get_or_create_conversation_id(user_id)
-        await bot.send_chat_action(message.chat.id, "typing")
+        async with admission_lock(user_id):
+            current_state = await state.get_state()
+            if current_state != state_cls.AI_CHAT.state:
+                return
+            conversation_id, rejection = await admit_user_message(
+                user_id, full_name, username, user_text, *marker,
+            )
+            if conversation_id is None:
+                event = "ADMISSION_REJECTED_STALE" if rejection == "stale" else "ADMISSION_REJECTED_INCOMPARABLE"
+                logging.info("%s operation=user", event)
+                return
 
-        inserted = await add_chat_message(
-            user_id,
-            full_name,
-            username,
-            "user",
-            user_text,
-            conversation_id,
-        )
-        if not inserted:
-            logging.info("Conversation stale_write_rejected operation=user")
-            return
+        await bot.send_chat_action(message.chat.id, "typing")
 
         data = await state.get_data()
         archetype = data.get("archetype", "Полутень")

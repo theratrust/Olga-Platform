@@ -14,6 +14,7 @@ from database import (
     get_conversation_history_with_ids,
     create_pending_draft, get_pending_draft, update_draft_status,
     rotate_conversation, get_or_create_conversation_id, is_active_conversation,
+    admit_user_message,
     is_pending_draft_active, save_approved_draft_message,
 )
 
@@ -178,6 +179,7 @@ ai_chat_handler = register_chat(
     shadow_observer=shadow_dispatcher.submit,
     quality_shadow_observer=quality_shadow_dispatcher.submit,
     get_conversation_history_with_ids=get_conversation_history_with_ids,
+    admit_user_message=admit_user_message,
 )
 
 register_voice(

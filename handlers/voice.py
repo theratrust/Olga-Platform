@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.fsm.context import FSMContext
 
 from utils.telegram import send_long_message
+from services.conversation_admission import private_message_marker
 
 def register_voice(
     dp: Dispatcher,
@@ -23,6 +24,9 @@ def register_voice(
         state: FSMContext,
     ):
         user_id = message.from_user.id
+        if user_id not in admin_ids and private_message_marker(message) is None:
+            logging.info("ADMISSION_REJECTED_INCOMPARABLE operation=voice")
+            return
 
         voice_obj = message.voice or message.audio
         file_info = await bot.get_file(voice_obj.file_id)

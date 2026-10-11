@@ -1,5 +1,6 @@
 """Offline quality-shadow tests with synthetic runtime inputs and fake ports."""
 import asyncio
+from itertools import count
 import ast
 import copy
 import hashlib
@@ -13,6 +14,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 from urllib import request
 import pytest
+_message_counter = count(1)
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -396,10 +399,11 @@ def test_delivery_before_quality_failure_preserves_candidate(monkeypatch, direct
             types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
             AsyncMock(), recent, pending, AsyncMock(),
             AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=direct, shadow_observer=method,
-            quality_shadow_observer=quality if quality_enabled else None)
+            quality_shadow_observer=quality if quality_enabled else None,
+            admit_user_message=AsyncMock(return_value=("db-session", None)))
         state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
         message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text=USER,
-                                        chat=types.SimpleNamespace(id=12), answer=AsyncMock())
+                                        chat=types.SimpleNamespace(id=12, type="private"), message_id=next(_message_counter), answer=AsyncMock())
         await handler(message, state)
         assert generate.await_count == 1 and message.answer.await_count == 1
         assert generate.call_args.kwargs["max_tokens"] == 350
@@ -465,17 +469,19 @@ def conversation_chat_ports(monkeypatch, direct, method_observer, quality_observ
     from uuid import uuid4
     active = [uuid4().hex]
     async def get_id(_user_id): return active[0]
-    async def rotate(_user_id):
+    async def rotate(_user_id, *_marker):
         active[0] = uuid4().hex
         return active[0]
+    async def admit(*_args): return active[0], None
     add, pending, clear = AsyncMock(), AsyncMock(return_value=55), AsyncMock(side_effect=rotate)
     handler = module.register_chat(dp, bot, client, "existing-coach", [99],
         types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
         add, recent, pending, clear, get_id, AsyncMock(return_value=True), direct_chat=direct,
-        shadow_observer=method_observer, quality_shadow_observer=quality_observer)
+        shadow_observer=method_observer, quality_shadow_observer=quality_observer,
+        admit_user_message=admit)
     def message(text=USER):
         return types.SimpleNamespace(from_user=types.SimpleNamespace(id=987654321, username=None), text=text,
-                                     chat=types.SimpleNamespace(id=987654321), answer=AsyncMock())
+                                     chat=types.SimpleNamespace(id=987654321, type="private"), message_id=next(_message_counter), answer=AsyncMock())
     return types.SimpleNamespace(handler=handler, new=commands["cmd_new"], generate=generate,
         message=message, deliveries=deliveries, add=add, pending=pending, clear=clear)
 
@@ -510,7 +516,9 @@ def test_conversation_correlation_same_messages_new_rotates_and_fallback(monkeyp
         assert state.current_state == "chat"
         assert {k:v for k,v in state.data.items() if k != "shadow_conversation_id"} == {k:v for k,v in before_new.items() if k != "shadow_conversation_id"}
         reset_message.answer.assert_awaited_once_with("Начинаем новый разговор. Предыдущая история очищена.\n\nНапиши, что сейчас для тебя важно.")
-        ports.clear.assert_awaited_once_with(987654321)
+        assert ports.clear.await_count == 1
+        assert ports.clear.await_args.args[:2] == (987654321, 987654321)
+        assert ports.clear.await_args.args[2] == reset_message.message_id
         third = ports.message()
         await ports.handler(third, state)
         assert observed_method == observed_quality == [first_id, first_id, next_id]

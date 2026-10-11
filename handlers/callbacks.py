@@ -1,6 +1,7 @@
 from aiogram import Dispatcher, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from services.conversation_admission import is_private_coaching_chat
 
 
 def register_callbacks(
@@ -11,6 +12,9 @@ def register_callbacks(
 
     @dp.callback_query(F.data == "menu_learn_more")
     async def menu_learn_more_handler(callback: types.CallbackQuery):
+        if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
+            await callback.answer()
+            return
         await callback.answer()
         chat_id = callback.message.chat.id
 
@@ -66,6 +70,9 @@ def register_callbacks(
 
     @dp.callback_query(F.data == "open_ai_chat")
     async def enter_chat(callback: types.CallbackQuery, state: FSMContext):
+        if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
+            await callback.answer()
+            return
         await callback.answer()
 
         current_state = await state.get_state()

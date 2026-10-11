@@ -76,9 +76,16 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS active_chat_sessions (
                 user_id INTEGER PRIMARY KEY,
-                conversation_id TEXT NOT NULL
+                conversation_id TEXT NOT NULL,
+                cutoff_chat_id INTEGER,
+                cutoff_message_id INTEGER
             )
         """)
+        async with db.execute("PRAGMA table_info(active_chat_sessions)") as cursor:
+            session_columns = {row[1] for row in await cursor.fetchall()}
+        for column in ("cutoff_chat_id", "cutoff_message_id"):
+            if column not in session_columns:
+                await db.execute(f"ALTER TABLE active_chat_sessions ADD COLUMN {column} INTEGER")
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
             ON chat_messages(user_id, conversation_id, id)
@@ -190,22 +197,84 @@ async def is_active_conversation(user_id: int, conversation_id: str):
             return await cursor.fetchone() is not None
 
 
-async def rotate_conversation(user_id: int):
-    """One write transaction fences old writes and removes old chat/drafts."""
+async def rotate_conversation(user_id: int, cutoff_chat_id: int, cutoff_message_id: int):
+    """Rotate/delete atomically; an older private /new cannot undo a newer one."""
+    if (
+        type(cutoff_chat_id) is not int or cutoff_chat_id != user_id
+        or type(cutoff_message_id) is not int or cutoff_message_id <= 0
+    ):
+        return None
     conversation_id = uuid4().hex
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")
-        await db.execute("""
-            INSERT INTO active_chat_sessions (user_id, conversation_id) VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET conversation_id = excluded.conversation_id
-        """, (user_id, conversation_id))
-        await db.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
-        await db.execute(
-            "DELETE FROM pending_drafts WHERE user_id = ? AND status = 'PENDING'",
-            (user_id,),
-        )
-        await db.commit()
+        try:
+            async with db.execute("""
+                SELECT cutoff_chat_id, cutoff_message_id
+                FROM active_chat_sessions WHERE user_id = ?
+            """, (user_id,)) as cursor:
+                row = await cursor.fetchone()
+            if row is not None and (row[0] is not None or row[1] is not None):
+                if row[0] != cutoff_chat_id or row[1] is None or cutoff_message_id <= row[1]:
+                    await db.rollback()
+                    return None
+            await db.execute("""
+                INSERT INTO active_chat_sessions
+                (user_id, conversation_id, cutoff_chat_id, cutoff_message_id)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    cutoff_chat_id = excluded.cutoff_chat_id,
+                    cutoff_message_id = excluded.cutoff_message_id
+            """, (user_id, conversation_id, cutoff_chat_id, cutoff_message_id))
+            await db.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
+            await db.execute(
+                "DELETE FROM pending_drafts WHERE user_id = ? AND status = 'PENDING'",
+                (user_id,),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
     return conversation_id
+
+
+async def admit_user_message(user_id: int, full_name: str, username: str,
+                             content: str, chat_id: int, message_id: int):
+    """Atomically bind a private inbound turn to the DB session or reject it.
+
+    Return (conversation_id, reason); a rejected turn never enters history.
+    """
+    if type(chat_id) is not int or chat_id != user_id or type(message_id) is not int or message_id <= 0:
+        return None, "incomparable"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute("""
+                INSERT OR IGNORE INTO active_chat_sessions (user_id, conversation_id)
+                VALUES (?, ?)
+            """, (user_id, uuid4().hex))
+            async with db.execute("""
+                SELECT conversation_id, cutoff_chat_id, cutoff_message_id
+                FROM active_chat_sessions WHERE user_id = ?
+            """, (user_id,)) as cursor:
+                conversation_id, cutoff_chat_id, cutoff_message_id = await cursor.fetchone()
+            if cutoff_chat_id is not None or cutoff_message_id is not None:
+                if cutoff_chat_id != chat_id or cutoff_message_id is None:
+                    await db.rollback()
+                    return None, "incomparable"
+                if message_id <= cutoff_message_id:
+                    await db.rollback()
+                    return None, "stale"
+            await db.execute("""
+                INSERT INTO chat_messages
+                (user_id, full_name, username, role, content, conversation_id)
+                VALUES (?, ?, ?, 'user', ?, ?)
+            """, (user_id, full_name, username, content, conversation_id))
+            await db.commit()
+            return conversation_id, None
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def add_chat_message(user_id: int, full_name: str, username: str,

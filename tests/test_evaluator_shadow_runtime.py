@@ -1,6 +1,7 @@
 """Offline shadow tests: synthetic conversations, fake providers and Telegram ports."""
 
 import asyncio
+from itertools import count
 import copy
 import importlib.util
 import json
@@ -15,6 +16,8 @@ from unittest.mock import AsyncMock
 from urllib import request
 
 import pytest
+
+_message_counter = count(1)
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -314,10 +317,11 @@ def test_actual_chat_handler_delivers_identical_candidate_before_observation(mon
     handler = module.register_chat(dp, bot, client, "existing-coach", [],
         types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
         AsyncMock(), recent, AsyncMock(), AsyncMock(),
-        AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=True, shadow_observer=observe)
+        AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=True,
+        shadow_observer=observe, admit_user_message=AsyncMock(return_value=("db-session", None)))
     state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
     message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text="Я не знаю.",
-                                    chat=types.SimpleNamespace(id=12), answer=AsyncMock())
+                                    chat=types.SimpleNamespace(id=12, type="private"), message_id=next(_message_counter), answer=AsyncMock())
     asyncio.run(handler(message, state))
     assert delivered == calls == [CANDIDATE]
     assert delivered[0].encode("utf-8") == CANDIDATE.encode("utf-8")
@@ -409,9 +413,10 @@ def test_moderation_delivery_unchanged_and_hook_runs_after_admin_delivery(monkey
             types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
             AsyncMock(), recent, pending, AsyncMock(),
             AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=False,
-            shadow_observer=observe if observer_enabled else None)
+            shadow_observer=observe if observer_enabled else None,
+            admit_user_message=AsyncMock(return_value=("db-session", None)))
         message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text="Я не знаю.",
-                                        chat=types.SimpleNamespace(id=12), answer=AsyncMock())
+                                        chat=types.SimpleNamespace(id=12, type="private"), message_id=next(_message_counter), answer=AsyncMock())
         state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
         await handler(message, state)
         assert generate.await_count == pending.await_count == message.answer.await_count == 1

@@ -2,6 +2,7 @@ import asyncio
 
 from aiogram import Dispatcher, Bot, types, F
 from aiogram.fsm.context import FSMContext
+from services.conversation_admission import is_private_coaching_chat
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -104,6 +105,9 @@ def register_quiz(
         callback: types.CallbackQuery,
         state: FSMContext,
     ):
+        if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
+            await callback.answer()
+            return
         await callback.answer()
 
         try:
@@ -132,6 +136,9 @@ def register_quiz(
         callback: types.CallbackQuery,
         state: FSMContext,
     ):
+        if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
+            await callback.answer()
+            return
         await callback.answer()
 
         try:
@@ -203,6 +210,9 @@ def register_quiz(
         callback: types.CallbackQuery,
         state: FSMContext,
     ):
+        if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
+            await callback.answer()
+            return
         await callback.answer()
 
         try:
