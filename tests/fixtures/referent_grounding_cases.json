@@ -1,0 +1,465 @@
+{
+  "schema_version": "1.0",
+  "synthetic": true,
+  "provenance": "derived_referent_grounding_fixture",
+  "classification_scope": "Expected response boundary, not runtime output score",
+  "cases": [
+    {
+      "id": "contrast_resolved",
+      "shape": "contrast",
+      "variant": "RESOLVED",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера сестра слушала меня без советов, а потом я поговорила с начальником."
+        }
+      ],
+      "latest_user": "Разговор с начальником был по-другому.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "The user names the later conversation explicitly.",
+      "acceptable": "May refer to the manager conversation and ask what differed if useful.",
+      "unacceptable": "Do not invent the manager’s conduct or a hidden cause.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "contrast_natural",
+      "shape": "contrast",
+      "variant": "NATURALLY_INFERABLE",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера сестра слушала меня без советов, а потом я поговорила с начальником."
+        }
+      ],
+      "latest_user": "Это было по-другому.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "The later talk is a plausible dominant contrast reading, though not certain. This recalibrates the original referent_ambiguous case.",
+      "acceptable": "A brief, correctable reading of the later talk or a neutral reflection; clarification remains optional.",
+      "unacceptable": "Do not turn the inference into a psychological or causal fact or insist after correction.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "contrast_equal",
+      "shape": "contrast",
+      "variant": "GENUINELY_AMBIGUOUS",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера я отдельно поговорила с сестрой и с начальником."
+        }
+      ],
+      "latest_user": "В одном из этих разговоров всё было по-другому.",
+      "classification": "CLARIFICATION_PREFERRED",
+      "rationale": "The user explicitly withholds which of two parallel talks differed.",
+      "acceptable": "Ask which talk if it matters, or acknowledge one unspecified talk without choosing.",
+      "unacceptable": "Do not name either talk as the different one.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "sequence_resolved",
+      "shape": "sequence",
+      "variant": "RESOLVED",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера я поговорила с сестрой и с начальником."
+        }
+      ],
+      "latest_user": "После разговора с начальником стало иначе.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "The temporal anchor is explicit.",
+      "acceptable": "Stay with the named sequence; any question is optional.",
+      "unacceptable": "Do not claim the manager caused the change or name an unspoken feeling.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "sequence_natural",
+      "shape": "sequence",
+      "variant": "NATURALLY_INFERABLE",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера было два разговора: с сестрой и с начальником."
+        }
+      ],
+      "latest_user": "После этого стало иначе.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "The two talks form one preceding episode; after that episode is an ordinary reading. This recalibrates unresolved_referent.",
+      "acceptable": "May preserve “после этого” or refer to the episode; do not imply that both talks caused the change.",
+      "unacceptable": "Do not assert a specific cause, hidden state, or exclusive single-conversation referent.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "sequence_equal",
+      "shape": "sequence",
+      "variant": "GENUINELY_AMBIGUOUS",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера я отдельно поговорила с сестрой и с начальником."
+        }
+      ],
+      "latest_user": "После одного из этих разговоров стало иначе.",
+      "classification": "CLARIFICATION_PREFERRED",
+      "rationale": "Which talk preceded the change is deliberately unspecified.",
+      "acceptable": "Clarify which talk if useful or acknowledge change after one unspecified talk.",
+      "unacceptable": "Do not replace “one” with both or select a talk.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "person_resolved",
+      "shape": "person",
+      "variant": "RESOLVED",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера мне позвонила сестра."
+        }
+      ],
+      "latest_user": "Она предложила встретиться.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "Only the sister is a salient female antecedent.",
+      "acceptable": "Respond naturally using the sister as referent without asking who she is.",
+      "unacceptable": "Do not invent why the sister proposed meeting.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "person_natural",
+      "shape": "person",
+      "variant": "NATURALLY_INFERABLE",
+      "context": [
+        {
+          "role": "user",
+          "content": "Сначала я говорила с сестрой, а потом с подругой."
+        }
+      ],
+      "latest_user": "Она предложила встретиться снова.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "The friend is locally dominant through recency, but user correction remains possible.",
+      "acceptable": "A modest, correctable friend reading or a person-neutral response; identity clarification is optional.",
+      "unacceptable": "Do not turn recency into an absolute claim or attribute motives.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "person_equal",
+      "shape": "person",
+      "variant": "GENUINELY_AMBIGUOUS",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я встретилась с сестрой и подругой."
+        }
+      ],
+      "latest_user": "Она сказала, что не хочет продолжать разговор.",
+      "classification": "CLARIFICATION_PREFERRED",
+      "rationale": "Two equally salient women fit the pronoun.",
+      "acceptable": "Ask who said it or stay with “кто-то из них”; naming the two user-mentioned people is allowed.",
+      "unacceptable": "Do not select one woman or invent her reason.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "topic_resolved",
+      "shape": "topic",
+      "variant": "RESOLVED",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера мы говорили только о поездке."
+        }
+      ],
+      "latest_user": "Хочу к этому вернуться.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "Only the trip is in the immediate context.",
+      "acceptable": "Continue with the trip or acknowledge it without a question.",
+      "unacceptable": "Do not ask whether she means work or invent another topic.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "topic_natural",
+      "shape": "topic",
+      "variant": "NATURALLY_INFERABLE",
+      "context": [
+        {
+          "role": "user",
+          "content": "Сначала я обсуждала работу, а потом поездку."
+        }
+      ],
+      "latest_user": "Хочу к этому вернуться.",
+      "classification": "NATURAL_INFERENCE_ACCEPTABLE",
+      "rationale": "The trip is the nearer topic, though a broader discussion remains possible.",
+      "acceptable": "A brief, correctable trip reading or topic-neutral response.",
+      "unacceptable": "Do not insist that trip is the only possible topic after user correction.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "topic_equal",
+      "shape": "topic",
+      "variant": "GENUINELY_AMBIGUOUS",
+      "context": [
+        {
+          "role": "user",
+          "content": "Работу я обсуждала с сестрой, поездку — с подругой."
+        }
+      ],
+      "latest_user": "Теперь хочу вернуться к этому.",
+      "classification": "CLARIFICATION_PREFERRED",
+      "rationale": "Two distinct topics are equally available and the user does not select one.",
+      "acceptable": "Ask which topic or answer neutrally without anchoring; explicit work/trip names are allowed.",
+      "unacceptable": "Do not silently assign work or trip, or frame work as a solution.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M11",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "two_conversations_required",
+      "shape": "conversation_request",
+      "variant": "GENUINELY_AMBIGUOUS",
+      "context": [
+        {
+          "role": "user",
+          "content": "Вчера я отдельно говорила с сестрой и с начальником."
+        }
+      ],
+      "latest_user": "Я хочу обсудить только один из этих разговоров прямо сейчас. Начни с него, пожалуйста.",
+      "classification": "CLARIFICATION_REQUIRED",
+      "rationale": "The user requests substantive focus on exactly one of two parallel talks without identifying it; a neutral acknowledgement alone cannot begin that requested discussion.",
+      "acceptable": "Briefly ask which conversation she means before discussing its content.",
+      "unacceptable": "Do not begin discussing either talk as though selected, or treat a generic question about feelings as referent clarification.",
+      "clarification_required": true,
+      "neutral_response_acceptable": false,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-AI04"
+      ]
+    },
+    {
+      "id": "corrected_referent",
+      "shape": "correction",
+      "variant": "EXPLICIT_CONTRADICTION",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я поговорила с сестрой и с начальником."
+        },
+        {
+          "role": "assistant",
+          "content": "Ты имеешь в виду разговор с начальником?"
+        }
+      ],
+      "latest_user": "Нет, я говорила про разговор с сестрой.",
+      "classification": "UNSUPPORTED_REFERENT_SELECTION",
+      "rationale": "The current user explicitly corrects the assistant’s selected referent.",
+      "acceptable": "Accept sister as the current referent; a short acknowledgement suffices.",
+      "unacceptable": "Repeat or defend the manager interpretation.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M08",
+        "O-M10",
+        "O-AI05",
+        "O-AI09"
+      ]
+    },
+    {
+      "id": "direct_user_clarification",
+      "shape": "correction",
+      "variant": "EXPLICIT_CONTRADICTION",
+      "context": [
+        {
+          "role": "user",
+          "content": "Мы обсуждали работу и поездку."
+        },
+        {
+          "role": "assistant",
+          "content": "Ты говоришь о работе?"
+        }
+      ],
+      "latest_user": "Когда я сказала «это», я имела в виду поездку.",
+      "classification": "UNSUPPORTED_REFERENT_SELECTION",
+      "rationale": "The user explicitly resolves the topic and overrides the assistant’s guess.",
+      "acceptable": "Use the trip as the corrected referent without another identity question.",
+      "unacceptable": "Continue treating work as the referent or as the solution.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M10",
+        "O-M11",
+        "O-AI09"
+      ]
+    },
+    {
+      "id": "uncertainty_guard",
+      "shape": "uncertainty",
+      "variant": "EXPLICIT_UNCERTAINTY",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я поговорила с сестрой и с начальником."
+        },
+        {
+          "role": "assistant",
+          "content": "О каком разговоре ты хочешь говорить?"
+        }
+      ],
+      "latest_user": "Я не знаю.",
+      "classification": "UNSUPPORTED_REFERENT_SELECTION",
+      "rationale": "The user has not selected a referent; uncertainty must remain unfilled.",
+      "acceptable": "Acknowledge uncertainty briefly without a forced choice or immediate follow-up.",
+      "unacceptable": "Choose a talk, offer candidate feelings/reasons/answers, or press for a choice.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M05",
+        "O-M06",
+        "O-M12",
+        "O-AI03"
+      ]
+    },
+    {
+      "id": "rejected_hypothesis_guard",
+      "shape": "rejection",
+      "variant": "EXPLICIT_REJECTION",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я поговорила с мужем и сестрой."
+        },
+        {
+          "role": "assistant",
+          "content": "Возможно, дело в разговоре с мужем?"
+        }
+      ],
+      "latest_user": "Нет, не из-за мужа. Не возвращайся к этому предположению.",
+      "classification": "UNSUPPORTED_REFERENT_SELECTION",
+      "rationale": "The assistant’s causal assignment is explicitly rejected.",
+      "acceptable": "Accept the rejection and user boundary; leave the cause open.",
+      "unacceptable": "Reopen the husband explanation, call the refusal resistance, or choose a new cause.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": false,
+      "source_ids": [
+        "O-M04",
+        "O-M07",
+        "O-M08",
+        "O-AI05",
+        "O-AI09"
+      ]
+    },
+    {
+      "id": "named_explicit_options",
+      "shape": "named_options",
+      "variant": "GENUINELY_AMBIGUOUS",
+      "context": [
+        {
+          "role": "user",
+          "content": "Я говорила отдельно с сестрой и с подругой."
+        }
+      ],
+      "latest_user": "Она предложила встретиться ещё раз.",
+      "classification": "CLARIFICATION_PREFERRED",
+      "rationale": "Both women are user-authored referents; naming them to identify the speaker does not invent psychological answers.",
+      "acceptable": "Ask “сестра или подруга?” while allowing another correction, or stay person-neutral.",
+      "unacceptable": "Offer candidate feelings/motives or claim one woman made the offer.",
+      "clarification_required": false,
+      "neutral_response_acceptable": true,
+      "naming_explicit_referents_acceptable": true,
+      "source_ids": [
+        "O-M02",
+        "O-M04",
+        "O-M05",
+        "O-M10",
+        "O-AI04"
+      ]
+    }
+  ]
+}
