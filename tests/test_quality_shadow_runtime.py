@@ -598,3 +598,29 @@ def test_conversation_id_and_user_id_never_reach_structured_shadow_logs(monkeypa
         matching = [e for e in events if e.get("session_hash") == hashlib.sha256(raw_id.encode()).hexdigest()]
         assert len(matching) == 4
         assert {e["mode"] for e in matching} == {"shadow", "quality_shadow"}
+
+
+@pytest.mark.parametrize("state_data,expected", [
+    ({}, None),
+    ({"archetype": None}, None),
+    ({"archetype": ""}, None),
+    ({"archetype": "Свет"}, "Свет"),
+    ({"archetype": "Полутень"}, "Полутень"),
+])
+def test_moderation_draft_omits_absent_quiz_result(monkeypatch, state_data, expected):
+    ports = conversation_chat_ports(monkeypatch, False, None, None)
+    state = ConversationFSM(state_data)
+    asyncio.run(ports.handler(ports.message("Продолжим."), state))
+    assert ports.generate.await_count == 1
+    assert ports.pending.await_count == 1
+    assert len(ports.deliveries) == 1
+    system = ports.generate.call_args.kwargs["messages"][0]["content"]
+    draft = ports.deliveries[0][1]
+    if expected is None:
+        assert "Результат экспресс-теста:" not in system
+        assert "Полутень" not in system
+        assert "Черновик от existing-coach:\n" in draft
+        assert "(None)" not in draft and "()" not in draft
+    else:
+        assert f"Результат экспресс-теста: {expected}." in system
+        assert f"Черновик от existing-coach ({expected}):\n" in draft

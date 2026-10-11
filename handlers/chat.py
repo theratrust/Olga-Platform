@@ -94,7 +94,7 @@ def register_chat(
         await bot.send_chat_action(message.chat.id, "typing")
 
         data = await state.get_data()
-        archetype = data.get("archetype", "Полутень")
+        archetype = data.get("archetype") or None
         # FSM is only an observer cache; DB identity governs persistence.
         if data.get("shadow_conversation_id") != conversation_id:
             await state.update_data(shadow_conversation_id=conversation_id)
@@ -189,12 +189,12 @@ def register_chat(
                     ]
                 )
 
+                archetype_label = f" ({archetype})" if archetype else ""
                 mod_text = (
                     "📩 Новый вопрос от пользователя: "
                     f"{full_name} ({username})\n"
                     f"«{user_text}»\n\n"
-                    f"🤖 Черновик от {model_name} "
-                    f"({archetype}):\n"
+                    f"🤖 Черновик от {model_name}{archetype_label}:\n"
                     f"{ai_draft}"
                 )
 

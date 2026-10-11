@@ -423,7 +423,7 @@ def test_real_sql_empty_ledger_is_byte_exact_baseline(monkeypatch, tmp_path, cap
         return await pipeline.ask(41, "Продолжим.")
     result = asyncio.run(scenario())
     from services.coaching_generator import build_system_instruction
-    baseline = build_system_instruction(first_name="Тест", archetype="Полутень")
+    baseline = build_system_instruction(first_name="Тест", archetype=None)
     assert result["messages"] == [{"role": "system", "content": baseline}] + result["expected_history"]
     assert result["messages"][0]["content"].encode() == baseline.encode()
     assert "СЛУЖЕБНАЯ ПАМЯТЬ" not in result["messages"][0]["content"]
@@ -560,3 +560,34 @@ def test_two_concurrent_handlers_share_current_db_conversation(monkeypatch, tmp_
         assert pipeline.bot.send_message.await_count == 2
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("state_data,expected", [
+    ({}, None),
+    ({"archetype": None}, None),
+    ({"archetype": ""}, None),
+    ({"archetype": "Свет"}, "Свет"),
+    ({"archetype": "Тень"}, "Тень"),
+    ({"archetype": "Полутень"}, "Полутень"),
+])
+def test_chat_uses_only_actual_fsm_quiz_result_in_generator_context(
+    monkeypatch, tmp_path, state_data, expected,
+):
+    pipeline = _real_pipeline(monkeypatch, tmp_path)
+    pipeline.state.get_data.return_value = copy.deepcopy(state_data)
+    result = asyncio.run(pipeline.ask(41, "Я не знаю."))
+    system = result["messages"][0]["content"]
+    from services.coaching_generator import build_system_instruction
+    assert system == build_system_instruction(first_name="Тест", archetype=expected)
+    if expected is None:
+        assert "Результат экспресс-теста:" not in system
+        assert "Полутень" not in system
+    else:
+        assert f"Результат экспресс-теста: {expected}." in system
+        assert "Не используй его как диагноз" in system
+    assert "Если человек говорит «я не знаю»" in DEFAULT_SYSTEM_PROMPT
+    assert "не предлагай ему возможные состояния" in DEFAULT_SYSTEM_PROMPT
+    assert result["messages"][1:] == result["expected_history"]
+    assert len(result["messages"][1:]) <= 20
+    assert DEFAULT_MAX_TOKENS == 350
+    assert len(pipeline.calls) == 1
