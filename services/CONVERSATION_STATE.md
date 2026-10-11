@@ -1,6 +1,6 @@
 # DEV conversation-state carry-forward
 
-This experiment carries only explicit older user boundaries/corrections and explicit rejection of an assistant hypothesis. It does not infer motives or goals, track active themes, or use an LLM summarizer.
+This experiment carries only explicit older user boundaries/corrections and source-linked explicit rejection of an assistant hypothesis, whether that rejection is inside or outside the latest 20 raw messages. It does not infer motives or goals, track active themes, or use an LLM summarizer.
 
 ## Conversation boundary
 
@@ -20,4 +20,4 @@ End-user coaching is private-chat only. /new, coaching text/voice, /start, quiz 
 
 A response can still be **sent** after /new if the reset occurs between the send-time active-ID check and Telegram delivery. The later DB insert is rejected, so persistence and ledger contamination are prevented, but user-visible send ordering still needs a separate pre-production solution. The same gap applies to moderated approval/edit. A valid post-/new message can still be processed before the reset handler and be deleted with the old conversation; the cutoff prevents an older message from entering the new conversation, but cannot recover this overtaken newer turn. Replies to concurrent messages inside one active conversation can finish out of order.
 
-The older-history ledger query remains unbounded **within the current conversation**. The existing deterministic event detector may omit ambiguous statements by design. No extra model call, prompt change, or evaluator dimension is introduced. This remains DEV-only, not production-ready.
+The full-history ledger source query remains unbounded **within the current conversation**. Recent recognized rejections are also labeled in the runtime block; raw history is unchanged. A later explicit user correction with a shared content word can suppress a rejection, but a semantic reopening without those lexical signals may leave the historical event visible. The current user message still has priority. The existing deterministic event detector may omit ambiguous statements by design. No extra model call, prompt change, or evaluator dimension is introduced. This remains DEV-only, not production-ready.
