@@ -183,6 +183,19 @@ async def get_recent_history(user_id: int, limit: int = 10):
         ]
 
 
+async def get_conversation_history_with_ids(user_id: int):
+    """Read the current DB conversation in message order for derived context."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT id, role, content
+            FROM chat_messages
+            WHERE user_id = ?
+            ORDER BY id ASC
+        """, (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+    return [{"id": row[0], "role": row[1], "content": row[2]} for row in rows]
+
+
 async def clear_chat_history(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(

@@ -10,9 +10,12 @@ def build_system_instruction(*, first_name, archetype):
     return build_coaching_prompt(first_name=first_name, archetype=archetype)
 
 
-def build_messages(system_instruction, history):
+def build_messages(system_instruction, history, *, runtime_memory=""):
     # Callers provide ordered history, already bounded exactly like chat's DB read.
-    return [{"role": "system", "content": system_instruction}] + history
+    system_content = system_instruction
+    if runtime_memory:
+        system_content += "\n\n" + runtime_memory
+    return [{"role": "system", "content": system_content}] + history
 
 
 async def generate_candidate(ai_client, model_name, messages, *, max_tokens=DEFAULT_MAX_TOKENS,

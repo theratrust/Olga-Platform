@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.coaching_generator import build_system_instruction, build_messages, generate_candidate
+from services.conversation_state import build_carry_forward, render_runtime_memory
 from utils.telegram import split_long_text
 
 
@@ -28,6 +29,7 @@ def register_chat(
     direct_chat: bool = False,
     shadow_observer=None,
     quality_shadow_observer=None,
+    get_conversation_history_with_ids=None,
 ):
 
     @dp.message(Command("new"))
@@ -90,7 +92,23 @@ def register_chat(
 
         history = await get_recent_history(user_id, limit=20)
 
-        messages_payload = build_messages(system_instruction, history)
+        ledger = []
+        if get_conversation_history_with_ids is not None:
+            try:
+                source_rows = await get_conversation_history_with_ids(user_id)
+                ledger = build_carry_forward(source_rows, history)
+            except Exception:
+                logging.warning("Conversation memory unavailable; using recent history")
+        runtime_memory = render_runtime_memory(ledger)
+        logging.debug(
+            "Conversation memory item_count=%d event_types=%s injected=%s",
+            len(ledger),
+            sorted({item["event_type"] for item in ledger}),
+            bool(runtime_memory),
+        )
+        messages_payload = build_messages(
+            system_instruction, history, runtime_memory=runtime_memory
+        )
 
         await message.answer(
             f"Спасибо за твой вопрос, {first_name}! "
