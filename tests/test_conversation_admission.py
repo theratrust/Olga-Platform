@@ -484,3 +484,47 @@ def test_admin_voice_in_group_keeps_existing_control_path(pipeline, monkeypatch)
         with sqlite3.connect(p.db) as conn:
             assert conn.execute("SELECT COUNT(*) FROM active_chat_sessions").fetchone()[0] == 0
     run(scenario())
+
+
+@pytest.mark.parametrize("user_text", [
+    "Что мне делать?",
+    "Мне очень тяжело на новой работе.",
+    "Я всё чаще думаю, что потеряла себя.",
+    "Не знаю.",
+])
+def test_acknowledgement_does_not_assume_question_for_text(pipeline, user_text):
+    p = pipeline
+    incoming = message(text=user_text)
+    run(p.coach(incoming, p.state))
+    incoming.answer.assert_awaited_once_with("Спасибо, Тест! Я скоро напишу тебе... 🌺")
+    assert p.generated.await_count == 1
+
+
+def test_statement_voice_transcript_gets_neutral_acknowledgement(pipeline):
+    p = pipeline
+    p.transcribe.return_value = "Мне очень тяжело на новой работе."
+    incoming = message(voice=True, text=None)
+    run(p.handlers["handle_voice_note"](incoming, p.state))
+    incoming.answer.assert_awaited_once_with("Спасибо, Тест! Я скоро напишу тебе... 🌺")
+    assert p.transcribe.await_count == p.generated.await_count == 1
+    assert incoming.text == "Мне очень тяжело на новой работе."
+
+
+def test_moderated_statement_acknowledgement_and_draft_heading_are_neutral(pipeline):
+    p = pipeline
+    coach = p.modules["chat"].register_chat(
+        p.dp, p.bot, object(), "offline", [99],
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
+        lambda user: "Тест", lambda user: "Тест",
+        database.add_chat_message, database.get_recent_history,
+        database.create_pending_draft, database.rotate_conversation,
+        database.get_or_create_conversation_id, database.is_active_conversation,
+        direct_chat=False, admit_user_message=database.admit_user_message,
+    )
+    incoming = message(text="Я всё чаще думаю, что потеряла себя.")
+    run(coach(incoming, p.state))
+    incoming.answer.assert_awaited_once_with("Спасибо, Тест! Я скоро напишу тебе... 🌺")
+    assert p.generated.await_count == 1
+    admin_text = p.bot.send_message.await_args.args[1]
+    assert admin_text.startswith("📩 Новое сообщение от пользователя: ")
+    assert "Новый вопрос" not in admin_text

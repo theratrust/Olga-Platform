@@ -125,8 +125,8 @@ def register_chat(
         )
 
         await message.answer(
-            f"Спасибо за твой вопрос, {first_name}! "
-            "Я сейчас обдумываю ответ и скоро напишу тебе... 🌺"
+            f"Спасибо, {first_name}! "
+            "Я скоро напишу тебе... 🌺"
         )
 
         logging.info("User acknowledgement sent")
@@ -191,7 +191,7 @@ def register_chat(
 
                 archetype_label = f" ({archetype})" if archetype else ""
                 mod_text = (
-                    "📩 Новый вопрос от пользователя: "
+                    "📩 Новое сообщение от пользователя: "
                     f"{full_name} ({username})\n"
                     f"«{user_text}»\n\n"
                     f"🤖 Черновик от {model_name}{archetype_label}:\n"
