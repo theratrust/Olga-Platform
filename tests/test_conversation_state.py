@@ -217,6 +217,7 @@ def _chat_module(monkeypatch):
 def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
     module = _chat_module(monkeypatch)
     storage = {1: copy.deepcopy(with_old(("user", "Не хочу обсуждать работу."))[0]), 2: []}
+    active = {1: "session-one", 2: "session-two"}
     commands = {}
 
     class Registrar:
@@ -237,25 +238,29 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
 
     client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
 
-    async def add(user_id, _name, _username, role, content):
+    async def get_id(user_id): return active[user_id]
+    async def is_active(user_id, cid): return active[user_id] == cid
+    async def rotate(user_id):
+        storage[user_id].clear()
+        active[user_id] += "-new"
+        return active[user_id]
+    async def add(user_id, _name, _username, role, content, cid):
+        if not await is_active(user_id, cid): return False
         entries = storage[user_id]
         next_id = entries[-1]["id"] + 1 if entries else 1
         entries.append({"id": next_id, "role": role, "content": content})
-
-    async def recent(user_id, limit):
-        assert limit == 20
+        return True
+    async def recent(user_id, cid, limit):
+        assert cid == active[user_id] and limit == 20
         return [{"role": x["role"], "content": x["content"]} for x in storage[user_id][-limit:]]
-
-    async def full(user_id):
+    async def full(user_id, cid):
+        assert cid == active[user_id]
         return copy.deepcopy(storage[user_id])
-
-    async def clear(user_id):
-        storage[user_id].clear()
 
     handler = module.register_chat(
         dp, bot, client, "fake", [], types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
-        lambda user: "Тест", lambda user: "Тест", add, recent, AsyncMock(), clear,
-        direct_chat=True, get_conversation_history_with_ids=full,
+        lambda user: "Тест", lambda user: "Тест", add, recent, AsyncMock(), rotate,
+        get_id, is_active, direct_chat=True, get_conversation_history_with_ids=full,
     )
     state = types.SimpleNamespace(
         get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}),
@@ -284,49 +289,9 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
 
 
 def _database_module(monkeypatch, tmp_path):
-    """Run the actual database.py SQL against a local SQLite fixture."""
-    class Execute:
-        def __init__(self, connection, sql, parameters):
-            self.connection, self.sql, self.parameters = connection, sql, parameters
-
-        def _run(self):
-            return self.connection.execute(self.sql, self.parameters)
-
-        def __await__(self):
-            async def run():
-                return self._run()
-            return run().__await__()
-
-        async def __aenter__(self):
-            self.cursor = self._run()
-            return self
-
-        async def __aexit__(self, *_):
-            self.cursor.close()
-
-        async def fetchall(self):
-            return self.cursor.fetchall()
-
-    class Connection:
-        def __init__(self, path):
-            self.path = path
-
-        async def __aenter__(self):
-            self.connection = sqlite3.connect(self.path)
-            return self
-
-        async def __aexit__(self, *_):
-            self.connection.close()
-
-        def execute(self, sql, parameters=()):
-            return Execute(self.connection, sql, parameters)
-
-        async def commit(self):
-            self.connection.commit()
-
-    shim = types.ModuleType("aiosqlite")
-    shim.connect = Connection
-    monkeypatch.setitem(sys.modules, "aiosqlite", shim)
+    """Run actual aiosqlite SQL against a test-only fixture."""
+    import aiosqlite
+    monkeypatch.setitem(sys.modules, "aiosqlite", aiosqlite)
     spec = importlib.util.spec_from_file_location("state_test_database", ROOT / "database.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -353,7 +318,8 @@ def _real_pipeline(monkeypatch, tmp_path):
     bot = types.SimpleNamespace(send_chat_action=AsyncMock(), send_message=AsyncMock())
 
     async def generate(_client, _model, messages):
-        expected = await database.get_recent_history(active_user[0], limit=20)
+        cid = await database.get_or_create_conversation_id(active_user[0])
+        expected = await database.get_recent_history(active_user[0], cid, limit=20)
         calls.append({"messages": copy.deepcopy(messages), "expected_history": expected})
         return "Тестовый ответ."
 
@@ -362,7 +328,8 @@ def _real_pipeline(monkeypatch, tmp_path):
         dp, bot, object(), "offline", [], types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
         lambda user: "Тест", lambda user: "Тест",
         database.add_chat_message, database.get_recent_history, AsyncMock(),
-        database.clear_chat_history, direct_chat=True,
+        database.rotate_conversation, database.get_or_create_conversation_id,
+        database.is_active_conversation, direct_chat=True,
         get_conversation_history_with_ids=database.get_conversation_history_with_ids,
     )
     state = types.SimpleNamespace(
@@ -384,12 +351,14 @@ def _real_pipeline(monkeypatch, tmp_path):
 
     async def seed(user_id, entries):
         for role, content in entries:
-            await database.add_chat_message(user_id, "Тест", "без username", role, content)
+            cid = await database.get_or_create_conversation_id(user_id)
+            await database.add_chat_message(user_id, "Тест", "без username", role, content, cid)
 
     async def reset(user_id):
         await commands["cmd_new"](message(user_id, "/new"), state)
 
-    return types.SimpleNamespace(database=database, ask=ask, seed=seed, reset=reset, calls=calls)
+    return types.SimpleNamespace(database=database, ask=ask, seed=seed, reset=reset, calls=calls,
+                                 chat=chat, handler=handler, bot=bot, state=state, message=message)
 
 
 def _fill(count):
@@ -461,10 +430,11 @@ def test_real_sql_new_clears_source_and_ledger_for_same_user(monkeypatch, tmp_pa
         await pipeline.seed(41, [("user", "Не хочу возвращаться к этой теме."), *_fill(25)])
         before = await pipeline.ask(41, "Продолжим.")
         await pipeline.reset(41)
-        assert await pipeline.database.get_conversation_history_with_ids(41) == []
+        cid = await pipeline.database.get_or_create_conversation_id(41)
+        assert await pipeline.database.get_conversation_history_with_ids(41, cid) == []
         after = await pipeline.ask(41, "Новый разговор.")
         other = await pipeline.ask(42, "Отдельный пользователь.")
-        return before, after, other, await pipeline.database.get_conversation_history_with_ids(41)
+        return before, after, other, await pipeline.database.get_conversation_history_with_ids(41, cid)
 
     before, after, other, rows_after = asyncio.run(scenario())
     assert "СЛУЖЕБНАЯ ПАМЯТЬ" in before["messages"][0]["content"]
@@ -474,23 +444,52 @@ def test_real_sql_new_clears_source_and_ledger_for_same_user(monkeypatch, tmp_pa
     assert all("Не хочу возвращаться" not in row["content"] for row in rows_after)
 
 
-def test_late_assistant_after_new_is_visible_in_raw_history(monkeypatch, tmp_path):
+def test_late_assistant_after_new_is_rejected_from_raw_and_ledger(monkeypatch, tmp_path):
     pipeline = _real_pipeline(monkeypatch, tmp_path)
 
     async def scenario():
+        old_id = await pipeline.database.get_or_create_conversation_id(41)
         await pipeline.seed(41, [("user", "Старый разговор.")])
         await pipeline.reset(41)
-        # In-flight old generation completes after the clear.
-        await pipeline.seed(41, [("assistant", "Возможно, ты боишься зависимости?")])
+        saved = await pipeline.database.add_chat_message(
+            41, "Тест", "без username", "assistant",
+            "Возможно, ты боишься зависимости?", old_id,
+        )
         first = await pipeline.ask(41, "Нет, это не про страх зависимости.")
         await pipeline.seed(41, _fill(25))
         later = await pipeline.ask(41, "Продолжим.")
-        return first, later
+        return saved, first, later
 
-    first, later = asyncio.run(scenario())
-    assert first["messages"][1]["content"] == "Возможно, ты боишься зависимости?"
-    # A late old-session assistant must not create durable rejection memory.
+    saved, first, later = asyncio.run(scenario())
+    assert saved is False
+    assert first["messages"][1] == {"role": "user", "content": "Нет, это не про страх зависимости."}
     assert "СЛУЖЕБНАЯ ПАМЯТЬ" not in later["messages"][0]["content"]
+
+
+def test_real_handler_discards_generation_finishing_after_new(monkeypatch, tmp_path, caplog):
+    pipeline = _real_pipeline(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO)
+    old_id = asyncio.run(pipeline.database.get_or_create_conversation_id(41))
+    sends_before = pipeline.bot.send_message.await_count
+
+    async def late_generate(_client, _model, _messages):
+        await pipeline.reset(41)
+        return "Старый ответ."
+
+    monkeypatch.setattr(pipeline.chat, "generate_candidate", late_generate)
+
+    async def scenario():
+        await pipeline.handler(pipeline.message(41, "Старый вопрос."), pipeline.state)
+        current_id = await pipeline.database.get_or_create_conversation_id(41)
+        assert await pipeline.database.get_recent_history(41, current_id, limit=20) == []
+        assert await pipeline.database.get_conversation_history_with_ids(41, current_id) == []
+
+    asyncio.run(scenario())
+    assert pipeline.bot.send_message.await_count == sends_before
+    stale_logs = [record.getMessage() for record in caplog.records
+                  if "stale_write_rejected" in record.getMessage()]
+    assert stale_logs == ["Conversation stale_write_rejected operation=generated_response"]
+    assert old_id not in "".join(stale_logs) and "41" not in "".join(stale_logs)
 
 
 @pytest.mark.parametrize("utterance", [
@@ -512,3 +511,43 @@ def test_rejection_false_positives_are_omitted(reply):
         ("user", reply),
     )
     assert all(item["event_type"] != "rejected_assistant_hypothesis" for item in found)
+
+
+def test_two_concurrent_handlers_share_current_db_conversation(monkeypatch, tmp_path):
+    pipeline = _real_pipeline(monkeypatch, tmp_path)
+    both_generating = asyncio.Event()
+    release = asyncio.Event()
+    count = 0
+
+    async def held_generate(_client, _model, _messages):
+        nonlocal count
+        count += 1
+        if count == 2:
+            both_generating.set()
+        await release.wait()
+        return "Ответ."
+
+    monkeypatch.setattr(pipeline.chat, "generate_candidate", held_generate)
+
+    async def scenario():
+        first = asyncio.create_task(
+            pipeline.handler(pipeline.message(41, "Вопрос 1."), pipeline.state)
+        )
+        second = asyncio.create_task(
+            pipeline.handler(pipeline.message(41, "Вопрос 2."), pipeline.state)
+        )
+        await asyncio.wait_for(both_generating.wait(), timeout=3)
+        cid = await pipeline.database.get_or_create_conversation_id(41)
+        release.set()
+        await asyncio.gather(first, second)
+        rows = await pipeline.database.get_conversation_history_with_ids(41, cid)
+        assert [row["role"] for row in rows] == [
+            "user", "user", "assistant", "assistant"
+        ]
+        assert {row["content"] for row in rows if row["role"] == "user"} == {
+            "Вопрос 1.", "Вопрос 2."
+        }
+        assert await pipeline.database.get_or_create_conversation_id(41) == cid
+        assert pipeline.bot.send_message.await_count == 2
+
+    asyncio.run(scenario())

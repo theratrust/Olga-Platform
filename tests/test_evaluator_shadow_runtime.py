@@ -313,7 +313,8 @@ def test_actual_chat_handler_delivers_identical_candidate_before_observation(mon
             runtime.evaluate_candidate_shadow(context, user, candidate, config=CONFIG, adapter=Model([output]))
     handler = module.register_chat(dp, bot, client, "existing-coach", [],
         types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
-        AsyncMock(), recent, AsyncMock(), AsyncMock(), direct_chat=True, shadow_observer=observe)
+        AsyncMock(), recent, AsyncMock(), AsyncMock(),
+        AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=True, shadow_observer=observe)
     state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
     message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text="Я не знаю.",
                                     chat=types.SimpleNamespace(id=12), answer=AsyncMock())
@@ -406,7 +407,8 @@ def test_moderation_delivery_unchanged_and_hook_runs_after_admin_delivery(monkey
         pending = AsyncMock(return_value=55)
         handler = module.register_chat(dp, bot, client, "existing-coach", [99],
             types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
-            AsyncMock(), recent, pending, AsyncMock(), direct_chat=False,
+            AsyncMock(), recent, pending, AsyncMock(),
+            AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=False,
             shadow_observer=observe if observer_enabled else None)
         message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text="Я не знаю.",
                                         chat=types.SimpleNamespace(id=12), answer=AsyncMock())

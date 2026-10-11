@@ -1,17 +1,17 @@
 # DEV conversation-state carry-forward
 
-This experimental runtime context keeps a few explicit user statements available after they leave the latest 20-message history window. It carries only older user boundaries or corrections and explicit rejections of a preceding assistant hypothesis. Each item retains source message IDs and short user wording.
+This experiment carries only explicit older user boundaries/corrections and explicit rejection of an assistant hypothesis. It does not infer motives or goals, track active themes, or use an LLM summarizer.
 
-## Scope
+## Conversation boundary
 
-The normal latest 20 raw messages remain unchanged and in chronological order. A deterministic reader inspects older chat rows and selects at most four eligible items. The generator receives them as a labeled runtime data block. No separate ledger is persisted, and no additional model call is made.
+The SQLite active_chat_sessions row is the source of truth for each Telegram user. New chat_messages and pending_drafts carry its opaque conversation_id. The latest 20 raw messages and the older deterministic ledger source are both read by user_id plus captured conversation_id. The ledger still contains at most four source-linked items and is never stored separately.
 
-This is not a psychological summary. It does not infer motives or goals, track active themes, or use an LLM summarizer.
+On first chat use, a new active ID is created. /new rotates that ID and deletes the user's chat rows and pending drafts still marked PENDING in one DB write transaction. New user/assistant rows and pending drafts use conditional inserts that reject a captured ID after it becomes stale. Approval/edit of a pending draft checks the active session and conditionally persists the delivered assistant turn. The FSM shadow ID is only a cache for observer correlation; it cannot authorize a DB write.
 
-## Safety and limits
+The schema upgrade is additive and repeat-safe: nullable conversation_id columns, one active_chat_sessions table, and a composite chat-history index. Legacy NULL rows are never assigned to a new session or read into its history. /new deletes them. No running database migration is performed by writing this code; init_db upgrades the configured DB only when that runtime is next started.
 
-False negatives are preferred over false positives: ambiguous events are omitted. The current user message and explicit later corrections take priority over carried-forward state.
+## Remaining limits
 
-The older-history query currently loads all stored rows for the user and is unbounded. Chat rows have no `conversation_id`. A late assistant write after `/new` can cross the logical session boundary and enter the next raw history window. The extractor excludes an assistant-first history from rejected-hypothesis carry-forward, but it cannot resolve every late-write interleaving without a reliable persisted session boundary.
+A response can still be **sent** after /new if the reset occurs between the send-time active-ID check and Telegram delivery. The later DB insert is rejected, so persistence and ledger contamination are prevented, but user-visible send ordering still needs a separate pre-production solution. The same gap applies to moderated approval/edit. An inbound message whose handler has not yet captured an ID when /new runs can be admitted under the new ID; strict Telegram update ordering needs a separate admission boundary. Replies to concurrent messages inside one active conversation can finish out of order.
 
-This slice is DEV-only and not production-ready.
+The older-history ledger query remains unbounded **within the current conversation**. The existing deterministic event detector may omit ambiguous statements by design. No extra model call, prompt change, or evaluator dimension is introduced. This remains DEV-only, not production-ready.

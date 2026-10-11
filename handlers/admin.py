@@ -19,7 +19,8 @@ def register_admin(
     approval_state,
     get_pending_draft,
     update_draft_status,
-    add_chat_message,
+    is_pending_draft_active,
+    save_approved_draft_message,
 ):
 
     def is_admin(user_id: int) -> bool:
@@ -128,28 +129,25 @@ def register_admin(
         ai_draft = draft[4]
 
         if not isinstance(ai_draft, str) or not ai_draft.strip():
-            logging.error(
-                "Draft %s has invalid AI content: %r",
-                draft_id,
-                ai_draft,
-            )
+            logging.error("Moderation draft has invalid AI content")
             await callback.answer(
                 "Черновик пустой или повреждён. Его нельзя отправить.",
                 show_alert=True,
             )
             return
 
+        if not await is_pending_draft_active(draft_id):
+            await update_draft_status(draft_id, "STALE")
+            logging.info("Conversation stale_draft_rejected operation=approve")
+            await callback.answer("Черновик относится к завершённому разговору.", show_alert=True)
+            return
+
         await bot.send_message(user_id, ai_draft)
 
-        await add_chat_message(
-            user_id,
-            full_name,
-            "N/A",
-            "assistant",
-            ai_draft,
-        )
-
-        await update_draft_status(draft_id, "APPROVED")
+        if not await save_approved_draft_message(draft_id, "N/A", ai_draft, "APPROVED"):
+            logging.info("Conversation stale_draft_rejected operation=approve_post_send")
+            await callback.answer("Разговор изменился; ответ не сохранён.", show_alert=True)
+            return
 
         await callback.message.edit_text(
             f"{callback.message.text}\n\n"
@@ -186,6 +184,12 @@ def register_admin(
                 f"Черновик уже обработан: {draft[5]}",
                 show_alert=True,
             )
+            return
+
+        if not await is_pending_draft_active(draft_id):
+            await update_draft_status(draft_id, "STALE")
+            logging.info("Conversation stale_draft_rejected operation=edit_start")
+            await callback.answer("Черновик относится к завершённому разговору.", show_alert=True)
             return
 
         await state.update_data(editing_draft_id=draft_id)
@@ -239,20 +243,20 @@ def register_admin(
         full_name = draft[2]
         edited_text = message.text.strip()
 
+        if not await is_pending_draft_active(draft_id):
+            await update_draft_status(draft_id, "STALE")
+            logging.info("Conversation stale_draft_rejected operation=edit")
+            await message.answer("Черновик относится к завершённому разговору.")
+            await state.clear()
+            return
+
         await bot.send_message(user_id, edited_text)
 
-        await add_chat_message(
-            user_id,
-            full_name,
-            "N/A",
-            "assistant",
-            edited_text,
-        )
-
-        await update_draft_status(
-            draft_id,
-            "EDITED_AND_SENT",
-        )
+        if not await save_approved_draft_message(draft_id, "N/A", edited_text, "EDITED_AND_SENT"):
+            logging.info("Conversation stale_draft_rejected operation=edit_post_send")
+            await message.answer("Разговор изменился; ответ не сохранён.")
+            await state.clear()
+            return
 
         await message.answer(
             "✅ Отредактированный ответ отправлен пользователю."

@@ -13,7 +13,8 @@ from database import (
     init_db, add_chat_message, get_recent_history,
     get_conversation_history_with_ids,
     create_pending_draft, get_pending_draft, update_draft_status,
-    clear_chat_history,
+    rotate_conversation, get_or_create_conversation_id, is_active_conversation,
+    is_pending_draft_active, save_approved_draft_message,
 )
 
 from handlers.start import register_start
@@ -125,7 +126,8 @@ register_admin(
     approval_state=OlgaApproval,
     get_pending_draft=get_pending_draft,
     update_draft_status=update_draft_status,
-    add_chat_message=add_chat_message,
+    is_pending_draft_active=is_pending_draft_active,
+    save_approved_draft_message=save_approved_draft_message,
 )
 
 
@@ -169,7 +171,9 @@ ai_chat_handler = register_chat(
     add_chat_message=add_chat_message,
     get_recent_history=get_recent_history,
     create_pending_draft=create_pending_draft,
-    clear_chat_history=clear_chat_history,
+    rotate_conversation=rotate_conversation,
+    get_or_create_conversation_id=get_or_create_conversation_id,
+    is_active_conversation=is_active_conversation,
     direct_chat=DEV_DIRECT_CHAT,
     shadow_observer=shadow_dispatcher.submit,
     quality_shadow_observer=quality_shadow_dispatcher.submit,

@@ -1,7 +1,6 @@
 import json
 import logging
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -25,7 +24,9 @@ def register_chat(
     add_chat_message,
     get_recent_history,
     create_pending_draft,
-    clear_chat_history,
+    rotate_conversation,
+    get_or_create_conversation_id,
+    is_active_conversation,
     direct_chat: bool = False,
     shadow_observer=None,
     quality_shadow_observer=None,
@@ -39,9 +40,9 @@ def register_chat(
     ):
         user_id = message.from_user.id
 
-        await clear_chat_history(user_id)
+        conversation_id = await rotate_conversation(user_id)
         await state.set_state(state_cls.AI_CHAT)
-        await state.update_data(shadow_conversation_id=uuid4().hex)
+        await state.update_data(shadow_conversation_id=conversation_id)
 
         await message.answer(
             "Начинаем новый разговор. Предыдущая история очищена.\n\n"
@@ -67,22 +68,26 @@ def register_chat(
             else "без username"
         )
 
+        # Capture DB identity before any await that can overlap /new.
+        conversation_id = await get_or_create_conversation_id(user_id)
         await bot.send_chat_action(message.chat.id, "typing")
 
-        await add_chat_message(
+        inserted = await add_chat_message(
             user_id,
             full_name,
             username,
             "user",
             user_text,
+            conversation_id,
         )
+        if not inserted:
+            logging.info("Conversation stale_write_rejected operation=user")
+            return
 
         data = await state.get_data()
         archetype = data.get("archetype", "Полутень")
-        # FSM-only correlation; never enters the prompt, database or user messages.
-        conversation_id = data.get("shadow_conversation_id")
-        if not isinstance(conversation_id, str) or not conversation_id:
-            conversation_id = uuid4().hex
+        # FSM is only an observer cache; DB identity governs persistence.
+        if data.get("shadow_conversation_id") != conversation_id:
             await state.update_data(shadow_conversation_id=conversation_id)
 
         system_instruction = build_system_instruction(
@@ -90,12 +95,12 @@ def register_chat(
             archetype=archetype,
         )
 
-        history = await get_recent_history(user_id, limit=20)
+        history = await get_recent_history(user_id, conversation_id, limit=20)
 
         ledger = []
         if get_conversation_history_with_ids is not None:
             try:
-                source_rows = await get_conversation_history_with_ids(user_id)
+                source_rows = await get_conversation_history_with_ids(user_id, conversation_id)
                 ledger = build_carry_forward(source_rows, history)
             except Exception:
                 logging.warning("Conversation memory unavailable; using recent history")
@@ -115,33 +120,32 @@ def register_chat(
             "Я сейчас обдумываю ответ и скоро напишу тебе... 🌺"
         )
 
-        logging.info(
-            f"User acknowledgement sent to {user_id}"
-        )
+        logging.info("User acknowledgement sent")
 
         try:
             ai_draft = await generate_candidate(ai_client, model_name, messages_payload)
-            logging.info(
-                "OpenRouter response received for user %s via model %s",
-                user_id,
-                model_name,
-            )
+            logging.info("OpenRouter response received")
+
+            if not await is_active_conversation(user_id, conversation_id):
+                logging.info("Conversation stale_write_rejected operation=generated_response")
+                return
 
             if direct_chat:
                 await bot.send_message(user_id, ai_draft)
 
-                await add_chat_message(
+                saved = await add_chat_message(
                     user_id,
                     full_name,
                     username,
                     "assistant",
                     ai_draft,
+                    conversation_id,
                 )
+                if not saved:
+                    logging.info("Conversation stale_write_rejected operation=assistant")
+                    return
 
-                logging.info(
-                    "Direct chat response sent to user %s",
-                    user_id,
-                )
+                logging.info("Direct chat response sent")
 
             else:
                 draft_id = await create_pending_draft(
@@ -149,11 +153,13 @@ def register_chat(
                     full_name,
                     user_text,
                     ai_draft,
+                    conversation_id,
                 )
+                if draft_id is None:
+                    logging.info("Conversation stale_write_rejected operation=draft")
+                    return
 
-                logging.info(
-                    f"Draft {draft_id} created for user {user_id}"
-                )
+                logging.info("Moderation draft created")
 
                 kb = InlineKeyboardMarkup(
                     inline_keyboard=[
@@ -196,16 +202,10 @@ def register_chat(
                                 reply_markup=kb if is_last_chunk else None,
                             )
 
-                        logging.info(
-                            f"Draft {draft_id} sent to admin "
-                            f"{admin_id}"
-                        )
+                        logging.info("Moderation draft sent to admin")
 
                     except Exception as exc:
-                        logging.error(
-                            f"Failed to send draft {draft_id} "
-                            f"to admin {admin_id}: {exc}"
-                        )
+                        logging.error("Moderation draft delivery failed kind=%s", type(exc).__name__)
 
             # Observation is scheduled only after the existing delivery path completes.
             # It never awaits an evaluator or changes the candidate/route.
@@ -230,9 +230,7 @@ def register_chat(
                         pass
 
         except Exception as exc:
-            logging.exception(
-                f"OpenRouter error: {exc}"
-            )
+            logging.error("OpenRouter error kind=%s", type(exc).__name__)
 
             await message.answer(
                 "Произошла ошибка связи. "

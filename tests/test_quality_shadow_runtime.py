@@ -394,7 +394,8 @@ def test_delivery_before_quality_failure_preserves_candidate(monkeypatch, direct
         pending = AsyncMock(return_value=55)
         handler = module.register_chat(dp, bot, client, "existing-coach", [99],
             types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
-            AsyncMock(), recent, pending, AsyncMock(), direct_chat=direct, shadow_observer=method,
+            AsyncMock(), recent, pending, AsyncMock(),
+            AsyncMock(return_value="db-session"), AsyncMock(return_value=True), direct_chat=direct, shadow_observer=method,
             quality_shadow_observer=quality if quality_enabled else None)
         state = types.SimpleNamespace(get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}), update_data=AsyncMock())
         message = types.SimpleNamespace(from_user=types.SimpleNamespace(id=12, username=None), text=USER,
@@ -461,10 +462,16 @@ def conversation_chat_ports(monkeypatch, direct, method_observer, quality_observ
     async def recent(*a, **k):
         assert k == {"limit": 20}
         return copy.deepcopy(CONTEXT)
-    add, pending, clear = AsyncMock(), AsyncMock(return_value=55), AsyncMock()
+    from uuid import uuid4
+    active = [uuid4().hex]
+    async def get_id(_user_id): return active[0]
+    async def rotate(_user_id):
+        active[0] = uuid4().hex
+        return active[0]
+    add, pending, clear = AsyncMock(), AsyncMock(return_value=55), AsyncMock(side_effect=rotate)
     handler = module.register_chat(dp, bot, client, "existing-coach", [99],
         types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
-        add, recent, pending, clear, direct_chat=direct,
+        add, recent, pending, clear, get_id, AsyncMock(return_value=True), direct_chat=direct,
         shadow_observer=method_observer, quality_shadow_observer=quality_observer)
     def message(text=USER):
         return types.SimpleNamespace(from_user=types.SimpleNamespace(id=987654321, username=None), text=text,
@@ -492,10 +499,9 @@ def test_conversation_correlation_same_messages_new_rotates_and_fallback(monkeyp
         first_id = state.data["shadow_conversation_id"]
         assert observed_method == observed_quality == [first_id, first_id]
         assert first_id != str(987654321)
+        assert len(first_id) == 32 and len(state.updates) == (0 if initial_id == first_id else 1)
         if initial_id:
-            assert first_id == initial_id and not state.updates
-        else:
-            assert len(first_id) == 32 and len(state.updates) == 1
+            assert first_id != initial_id  # DB is authoritative over stale FSM cache.
         before_new = copy.deepcopy(state.data)
         reset_message = ports.message("/new")
         await ports.new(reset_message, state)
@@ -519,14 +525,15 @@ def test_conversation_correlation_same_messages_new_rotates_and_fallback(monkeyp
             assert ports.pending.await_count == 0
         else:
             assert ports.pending.await_count == 3
-        persisted = str(ports.add.call_args_list + ports.pending.call_args_list + ports.clear.call_args_list)
+        persisted = str(ports.add.call_args_list + ports.pending.call_args_list)
         user_facing = str(first.answer.call_args_list + second.answer.call_args_list + reset_message.answer.call_args_list + third.answer.call_args_list + ports.deliveries)
         for raw_id in (first_id, next_id):
-            assert raw_id not in persisted + user_facing + str(ports.generate.call_args_list)
+            assert raw_id in persisted
+            assert raw_id not in user_facing + str(ports.generate.call_args_list)
     asyncio.run(scenario())
 
 
-def test_each_new_creates_fresh_fsm_only_id_even_without_intervening_message(monkeypatch):
+def test_each_new_rotates_db_id_even_without_intervening_message(monkeypatch):
     ports = conversation_chat_ports(monkeypatch, True, None, None)
     state = ConversationFSM({"archetype": "Полутень"})
     async def scenario():

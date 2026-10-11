@@ -1,5 +1,6 @@
 import os
 import aiosqlite
+from uuid import uuid4
 
 DB_PATH = os.getenv("DB_NAME", "bot_data.db")
 
@@ -66,6 +67,22 @@ async def init_db():
             )
         """)
 
+        # Additive, repeat-safe DEV upgrade. NULL legacy rows remain unattributed.
+        for table in ("chat_messages", "pending_drafts"):
+            async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                columns = {row[1] for row in await cursor.fetchall()}
+            if "conversation_id" not in columns:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN conversation_id TEXT")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS active_chat_sessions (
+                user_id INTEGER PRIMARY KEY,
+                conversation_id TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
+            ON chat_messages(user_id, conversation_id, id)
+        """)
         await db.commit()
 
 
@@ -146,120 +163,164 @@ async def get_subscription_stats():
 # Chat history
 # --------------------------------------------------------------------
 
-async def add_chat_message(user_id: int,
-                           full_name: str,
-                           username: str,
-                           role: str,
-                           content: str):
-
+async def get_or_create_conversation_id(user_id: int):
+    """DB identity survives FSM loss; never adopts NULL legacy messages."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
         await db.execute("""
-            INSERT INTO chat_messages
-            (user_id, full_name, username, role, content)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, full_name, username, role, content))
-        await db.commit()
-
-
-async def get_recent_history(user_id: int, limit: int = 10):
-    async with aiosqlite.connect(DB_PATH) as db:
-
+            INSERT OR IGNORE INTO active_chat_sessions (user_id, conversation_id)
+            VALUES (?, ?)
+        """, (user_id, uuid4().hex))
         async with db.execute("""
-            SELECT role, content
-            FROM chat_messages
-            WHERE user_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-        """, (user_id, limit)) as cursor:
-
-            rows = await cursor.fetchall()
-
-        return [
-            {
-                "role": row[0],
-                "content": row[1]
-            }
-            for row in reversed(rows)
-        ]
-
-
-async def get_conversation_history_with_ids(user_id: int):
-    """Read the current DB conversation in message order for derived context."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-            SELECT id, role, content
-            FROM chat_messages
-            WHERE user_id = ?
-            ORDER BY id ASC
+            SELECT conversation_id FROM active_chat_sessions WHERE user_id = ?
         """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        await db.commit()
+        return row[0]
+
+
+async def is_active_conversation(user_id: int, conversation_id: str):
+    if not conversation_id:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT 1 FROM active_chat_sessions
+            WHERE user_id = ? AND conversation_id = ?
+        """, (user_id, conversation_id)) as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def rotate_conversation(user_id: int):
+    """One write transaction fences old writes and removes old chat/drafts."""
+    conversation_id = uuid4().hex
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("""
+            INSERT INTO active_chat_sessions (user_id, conversation_id) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET conversation_id = excluded.conversation_id
+        """, (user_id, conversation_id))
+        await db.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
+        await db.execute(
+            "DELETE FROM pending_drafts WHERE user_id = ? AND status = 'PENDING'",
+            (user_id,),
+        )
+        await db.commit()
+    return conversation_id
+
+
+async def add_chat_message(user_id: int, full_name: str, username: str,
+                           role: str, content: str, conversation_id: str):
+    """Atomic active-ID check and insert; return False for stale work."""
+    if not conversation_id:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cursor = await db.execute("""
+            INSERT INTO chat_messages
+            (user_id, full_name, username, role, content, conversation_id)
+            SELECT ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+                SELECT 1 FROM active_chat_sessions
+                WHERE user_id = ? AND conversation_id = ?
+            )
+        """, (user_id, full_name, username, role, content, conversation_id,
+              user_id, conversation_id))
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def get_recent_history(user_id: int, conversation_id: str, limit: int = 10):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT role, content FROM chat_messages
+            WHERE user_id = ? AND conversation_id = ?
+            ORDER BY id DESC LIMIT ?
+        """, (user_id, conversation_id, limit)) as cursor:
+            rows = await cursor.fetchall()
+    return [{"role": role, "content": content} for role, content in reversed(rows)]
+
+
+async def get_conversation_history_with_ids(user_id: int, conversation_id: str):
+    """Only rows belonging to the captured logical conversation."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT id, role, content FROM chat_messages
+            WHERE user_id = ? AND conversation_id = ? ORDER BY id ASC
+        """, (user_id, conversation_id)) as cursor:
             rows = await cursor.fetchall()
     return [{"id": row[0], "role": row[1], "content": row[2]} for row in rows]
 
 
-async def clear_chat_history(user_id: int):
+async def create_pending_draft(user_id: int, full_name: str, user_message: str,
+                               ai_draft: str, conversation_id: str):
+    if not conversation_id:
+        return None
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            DELETE FROM chat_messages
-            WHERE user_id = ?
-            """,
-            (user_id,),
-        )
-        await db.commit()
-
-
-# --------------------------------------------------------------------
-# Pending drafts
-# --------------------------------------------------------------------
-
-async def create_pending_draft(user_id: int,
-                               full_name: str,
-                               user_message: str,
-                               ai_draft: str):
-
-    async with aiosqlite.connect(DB_PATH) as db:
-
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute("""
             INSERT INTO pending_drafts
-            (user_id, full_name, user_message, ai_draft)
-            VALUES (?, ?, ?, ?)
-        """, (
-            user_id,
-            full_name,
-            user_message,
-            ai_draft
-        ))
-
+            (user_id, full_name, user_message, ai_draft, conversation_id)
+            SELECT ?, ?, ?, ?, ?
+            WHERE EXISTS (
+                SELECT 1 FROM active_chat_sessions
+                WHERE user_id = ? AND conversation_id = ?
+            )
+        """, (user_id, full_name, user_message, ai_draft, conversation_id,
+              user_id, conversation_id))
         await db.commit()
-        return cursor.lastrowid
+        return cursor.lastrowid if cursor.rowcount == 1 else None
 
 
 async def get_pending_draft(draft_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-
         async with db.execute("""
-            SELECT id,
-                   user_id,
-                   full_name,
-                   user_message,
-                   ai_draft,
-                   status
-            FROM pending_drafts
-            WHERE id = ?
+            SELECT id, user_id, full_name, user_message, ai_draft, status,
+                   conversation_id
+            FROM pending_drafts WHERE id = ?
         """, (draft_id,)) as cursor:
-
             return await cursor.fetchone()
+
+
+async def is_pending_draft_active(draft_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT 1 FROM pending_drafts AS d
+            JOIN active_chat_sessions AS s
+              ON s.user_id = d.user_id AND s.conversation_id = d.conversation_id
+            WHERE d.id = ? AND d.status = 'PENDING'
+        """, (draft_id,)) as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def save_approved_draft_message(draft_id: int, username: str,
+                                      content: str, status: str):
+    """Atomic draft/session check, assistant insert, and draft status update."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cursor = await db.execute("""
+            INSERT INTO chat_messages
+            (user_id, full_name, username, role, content, conversation_id)
+            SELECT d.user_id, d.full_name, ?, 'assistant', ?, d.conversation_id
+            FROM pending_drafts AS d
+            JOIN active_chat_sessions AS s
+              ON s.user_id = d.user_id AND s.conversation_id = d.conversation_id
+            WHERE d.id = ? AND d.status = 'PENDING'
+        """, (username, content, draft_id))
+        if cursor.rowcount != 1:
+            await db.commit()
+            return False
+        await db.execute("""
+            UPDATE pending_drafts SET status = ? WHERE id = ?
+        """, (status, draft_id))
+        await db.commit()
+        return True
 
 
 async def update_draft_status(draft_id: int, status: str):
     async with aiosqlite.connect(DB_PATH) as db:
-
         await db.execute("""
-            UPDATE pending_drafts
-            SET status = ?
-            WHERE id = ?
+            UPDATE pending_drafts SET status = ? WHERE id = ?
         """, (status, draft_id))
-
         await db.commit()
 
 
