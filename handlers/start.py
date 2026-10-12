@@ -1,7 +1,7 @@
 from aiogram import Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from services.conversation_admission import is_private_coaching_chat
 
 
@@ -9,6 +9,8 @@ def register_start(
     dp: Dispatcher,
     get_user_first_name,
     get_image_file,
+    state_cls=None,
+    is_coaching_eligible=None,
 ):
 
     @dp.message(Command("start"))
@@ -16,7 +18,24 @@ def register_start(
         if not is_private_coaching_chat(message.chat, message.from_user.id):
             return
 
+        # /start is navigation. Only the explicit durable marker can select home.
+        eligible = (
+            await is_coaching_eligible(message.from_user.id)
+            if is_coaching_eligible is not None else False
+        )
         await state.clear()
+        if eligible:
+            if state_cls is None:
+                raise ValueError("A home FSM state is required for eligible users")
+            await state.set_state(state_cls.HOME)
+            home = await message.answer(
+                "С возвращением. Ты можешь продолжить текущий разговор.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text="Продолжить разговор", callback_data="continue_coaching",
+                )]]),
+            )
+            await state.update_data(home_message_id=home.message_id)
+            return
 
         user_first_name = get_user_first_name(message.from_user)
 

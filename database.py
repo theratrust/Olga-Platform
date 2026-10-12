@@ -229,6 +229,16 @@ async def mark_coaching_eligible(user_id: int):
             raise
 
 
+async def is_coaching_eligible(user_id: int) -> bool:
+    """Read only the explicit coaching-entry marker, without creating a session."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT coaching_eligible FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return row is not None and row[0] == 1
+
+
 async def get_coaching_resume_conversation_id(user_id: int):
     """Read-only eligibility proof plus current session; never create an ID."""
     async with aiosqlite.connect(DB_PATH) as db:

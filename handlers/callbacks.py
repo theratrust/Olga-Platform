@@ -11,6 +11,7 @@ def register_callbacks(
     bot,
     state_cls,
     mark_coaching_eligible=None,
+    get_coaching_resume_conversation_id=None,
 ):
 
     async def reject(callback, reason):
@@ -23,6 +24,41 @@ def register_callbacks(
             type(expected_id) is int
             and expected_id > 0
             and expected_id == message.message_id
+        )
+
+    @dp.callback_query(F.data == "continue_coaching")
+    async def continue_coaching(callback: types.CallbackQuery, state: FSMContext):
+        if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
+            await callback.answer()
+            return
+        home_state = getattr(getattr(state_cls, "HOME", None), "state", None)
+        if home_state is None or await state.get_state() != home_state:
+            await reject(callback, "wrong_state")
+            return
+        data = await state.get_data()
+        expected_id = data.get("home_message_id")
+        if (
+            type(expected_id) is not int
+            or expected_id <= 0
+            or expected_id != callback.message.message_id
+        ):
+            await reject(callback, "stale_message")
+            return
+        # Recheck durable authority at the action, not just when home was shown.
+        conversation_id = (
+            await get_coaching_resume_conversation_id(callback.from_user.id)
+            if get_coaching_resume_conversation_id is not None else None
+        )
+        if conversation_id is None:
+            await reject(callback, "missing_session")
+            return
+        await callback.answer()
+        await state.update_data(
+            home_message_id=None, shadow_conversation_id=conversation_id,
+        )
+        await state.set_state(state_cls.AI_CHAT)
+        await callback.message.answer(
+            "Можешь продолжить разговор. Напиши, что сейчас для тебя важно."
         )
 
     @dp.callback_query(F.data == "menu_learn_more")

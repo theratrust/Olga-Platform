@@ -16,7 +16,7 @@ from database import (
     rotate_conversation, get_or_create_conversation_id, is_active_conversation,
     admit_user_message, mark_coaching_eligible, get_coaching_resume_conversation_id,
     persist_completed_quiz_result, get_coaching_quiz_result,
-    is_pending_draft_active, save_approved_draft_message,
+    is_pending_draft_active, save_approved_draft_message, is_coaching_eligible,
 )
 
 from handlers.start import register_start
@@ -62,6 +62,7 @@ class Quiz(StatesGroup):
     QUESTION_STEP = State()
     CALC = State()
     AI_CHAT = State()
+    HOME = State()
 
 class OlgaApproval(StatesGroup):
     WAITING_FOR_EDIT = State()
@@ -102,6 +103,8 @@ register_start(
     dp,
     get_user_first_name,
     get_image_file,
+    state_cls=Quiz,
+    is_coaching_eligible=is_coaching_eligible,
 )
 
 register_callbacks(
@@ -109,6 +112,7 @@ register_callbacks(
     bot,
     Quiz,
     mark_coaching_eligible=mark_coaching_eligible,
+    get_coaching_resume_conversation_id=get_coaching_resume_conversation_id,
 )
 
 register_quiz(

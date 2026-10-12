@@ -120,7 +120,7 @@ def incoming(message_id, text=None, *, user_id=41, voice=False, audio=False, cha
         from_user=user, chat=chat, message_id=message_id, text=text,
         voice=types.SimpleNamespace(file_id="offline") if voice else None,
         audio=types.SimpleNamespace(file_id="offline-audio") if audio else None,
-        answer=AsyncMock(),
+        answer=AsyncMock(return_value=types.SimpleNamespace(message_id=message_id + 1)),
         answer_photo=AsyncMock(return_value=types.SimpleNamespace(message_id=message_id)),
         delete=AsyncMock(),
     )
@@ -160,16 +160,23 @@ def app(monkeypatch, tmp_path):
         QUESTION_STEP=types.SimpleNamespace(state="question"),
         CALC=types.SimpleNamespace(state="calc"),
         AI_CHAT=types.SimpleNamespace(state="chat"),
+        HOME=types.SimpleNamespace(state="home"),
     )
     questions = json.loads(
         (ROOT / "knowledge/method/shadow_light/v1.1/questions.json").read_text()
     )
-    loaded["start"].register_start(dp, lambda user: user.first_name, lambda _: object())
+    loaded["start"].register_start(
+        dp, lambda user: user.first_name, lambda _: object(),
+        state_cls=states, is_coaching_eligible=database.is_coaching_eligible,
+    )
     loaded["quiz"].register_quiz(
         dp, bot, states, questions, lambda user: user.first_name, lambda _: object(),
         persist_completed_quiz_result=database.persist_completed_quiz_result,
     )
-    loaded["callbacks"].register_callbacks(dp, bot, states, mark_coaching_eligible=database.mark_coaching_eligible)
+    loaded["callbacks"].register_callbacks(
+        dp, bot, states, mark_coaching_eligible=database.mark_coaching_eligible,
+        get_coaching_resume_conversation_id=database.get_coaching_resume_conversation_id,
+    )
     generated = AsyncMock(return_value="Ответ.")
     monkeypatch.setattr(loaded["chat"], "generate_candidate", generated)
     coach = loaded["chat"].register_chat(
@@ -560,17 +567,18 @@ def test_new_does_not_grant_unmarked_user_resume(app):
     run(scenario())
 
 
-def test_start_in_progress_keeps_onboarding_even_for_marked_user(app):
+def test_start_home_allows_existing_recovery_without_button(app):
     async def scenario():
-        await complete_normal_path(app, MemoryStorageDouble().context())
+        cid = await complete_normal_path(app, MemoryStorageDouble().context())
         state = MemoryStorageDouble().context()
         await app.functions["cmd_start"](incoming(107, "/start"), state)
-        assert await state.get_state() is None
-        assert (await state.get_data())["user_first_name"] == "Тест"
+        assert await state.get_state() == app.states.HOME.state
+        assert (await state.get_data())["home_message_id"] == 108
         before = app.generated.await_count
-        await app.functions["coaching"](incoming(108, "Пока прохожу вход."), state)
-        assert app.generated.await_count == before
-        assert await database.get_coaching_resume_conversation_id(41) is not None
+        await app.functions["coaching"](incoming(109, "Продолжаю разговор."), state)
+        assert app.generated.await_count == before + 1
+        assert await state.get_state() == app.states.AI_CHAT.state
+        assert await database.get_coaching_resume_conversation_id(41) == cid
     run(scenario())
 
 
@@ -929,7 +937,10 @@ def test_stale_result_button_in_new_completed_quiz_cannot_change_durable_fields(
         old_result_button = 104
         old_entry_button = 106
 
-        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        # Exercise the callback guard against a second active quiz FSM directly.
+        # /start no longer initiates a retake for an eligible user.
+        await state.clear()
+        await state.update_data(user_first_name="Тест", welcome_message_id=200)
         await app.functions["start_quiz"](callback(200, "start_quiz"), state)
         for choice in (2, 2, 0):
             mid = (await state.get_data())["last_question_message_id"]
@@ -1346,8 +1357,8 @@ def test_eligible_user_mid_quiz_does_not_preflight_voice_into_coaching(app):
     async def scenario():
         state = MemoryStorageDouble().context()
         await complete_normal_path(app, state)
-        await app.functions["cmd_start"](incoming(107, "/start"), state)
-        await app.functions["start_quiz"](callback(107, "start_quiz"), state)
+        await state.set_state(app.states.QUESTION_STEP)
+        await state.update_data(current_q_idx=0, answers_list=[], total_score=0)
         assert await state.get_state() == app.states.QUESTION_STEP.state
         before = await state.get_data()
         await app.functions["handle_voice_note"](incoming(108, voice=True), state)
@@ -1373,4 +1384,264 @@ def test_fresh_voice_transcription_exception_keeps_existing_boundary(app):
         assert app.transcribe.await_count == 1
         assert app.generated.await_count == 0
         assert await database.get_recent_history(41, cid) == []
+    run(scenario())
+
+# Contextual /start: durable state is unchanged by opening home or continuing.
+def durable_start_snapshot(db_path, user_id=41):
+    with sqlite3.connect(db_path) as conn:
+        return {
+            "user": conn.execute(
+                "SELECT coaching_eligible, test_result, quiz_result_verified "
+                "FROM users WHERE user_id = ?", (user_id,),
+            ).fetchone(),
+            "session": conn.execute(
+                "SELECT conversation_id, cutoff_chat_id, cutoff_message_id "
+                "FROM active_chat_sessions WHERE user_id = ?", (user_id,),
+            ).fetchone(),
+            "history": conn.execute(
+                "SELECT role, content, conversation_id FROM chat_messages "
+                "WHERE user_id = ? ORDER BY id", (user_id,),
+            ).fetchall(),
+            "drafts": conn.execute(
+                "SELECT status, conversation_id FROM pending_drafts "
+                "WHERE user_id = ? ORDER BY id", (user_id,),
+            ).fetchall(),
+        }
+
+
+@pytest.mark.parametrize("row_kind", ["new", "user", "history", "session", "legacy"])
+def test_start_ineligible_evidence_never_selects_home(app, row_kind):
+    async def scenario():
+        if row_kind != "new":
+            with sqlite3.connect(app.db_path) as conn:
+                conn.execute("INSERT INTO users (user_id) VALUES (41)")
+                if row_kind in {"history", "legacy"}:
+                    conn.execute(
+                        "INSERT INTO chat_messages (user_id, role, content) "
+                        "VALUES (41, 'user', 'legacy')"
+                    )
+                if row_kind in {"session", "legacy"}:
+                    conn.execute(
+                        "INSERT INTO active_chat_sessions (user_id, conversation_id) "
+                        "VALUES (41, 'legacy-id')"
+                    )
+                if row_kind == "legacy":
+                    conn.execute(
+                        "UPDATE users SET test_result='Полутень', "
+                        "quiz_result_verified=0 WHERE user_id=41"
+                    )
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(100, "/start"), state)
+        assert await state.get_state() is None
+        assert (await state.get_data())["welcome_message_id"] == 100
+        assert await database.is_coaching_eligible(41) is False
+        await app.functions["start_quiz"](callback(100, "start_quiz"), state)
+        assert await state.get_state() == app.states.QUESTION_STEP.state
+        assert (await state.get_data())["current_q_idx"] == 0
+        app.generated.assert_not_awaited()
+    run(scenario())
+
+
+def test_start_interrupts_noneligible_quiz_and_restarts_at_first_question(app):
+    async def scenario():
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(100, "/start"), state)
+        await app.functions["start_quiz"](callback(100, "start_quiz"), state)
+        await app.functions["process_answer"](callback(101, "q_ans_0"), state)
+        assert (await state.get_data())["current_q_idx"] == 1
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        assert await state.get_state() is None
+        assert "answers_list" not in await state.get_data()
+        old_button = callback(102, "q_ans_0")
+        await app.functions["process_answer"](old_button, state)
+        assert old_button.answer.await_count == 1
+        await app.functions["start_quiz"](callback(200, "start_quiz"), state)
+        assert await state.get_state() == app.states.QUESTION_STEP.state
+        assert (await state.get_data())["current_q_idx"] == 0
+        assert (await state.get_data())["answers_list"] == []
+        assert await database.is_coaching_eligible(41) is False
+    run(scenario())
+
+
+@pytest.mark.parametrize("fresh_fsm", [False, True])
+def test_eligible_start_and_continue_are_durably_nondestructive(app, fresh_fsm):
+    async def scenario():
+        existing_state = MemoryStorageDouble().context()
+        cid = await complete_normal_path(app, existing_state)
+        with sqlite3.connect(app.db_path) as conn:
+            conn.execute(
+                "INSERT INTO pending_drafts (user_id, status, conversation_id) "
+                "VALUES (41, 'PENDING', ?)", (cid,)
+            )
+        before = durable_start_snapshot(app.db_path)
+        state = MemoryStorageDouble().context() if fresh_fsm else existing_state
+        model_calls = app.generated.await_count
+        start = incoming(200, "/start")
+        await app.functions["cmd_start"](start, state)
+        assert await state.get_state() == app.states.HOME.state
+        assert start.answer.await_count == 1
+        start.answer_photo.assert_not_awaited()
+        assert start.answer.await_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "continue_coaching"
+        assert durable_start_snapshot(app.db_path) == before
+        assert app.generated.await_count == model_calls
+        assert (await state.get_data())["home_message_id"] == 201
+        continue_button = callback(201, "continue_coaching")
+        await app.functions["continue_coaching"](continue_button, state)
+        assert await state.get_state() == app.states.AI_CHAT.state
+        assert (await state.get_data())["shadow_conversation_id"] == cid
+        assert continue_button.message.answer.await_count == 1
+        assert durable_start_snapshot(app.db_path) == before
+        assert app.generated.await_count == model_calls
+        assert await database.get_coaching_quiz_result(41) == "Тень"
+    run(scenario())
+
+
+def test_start_home_continue_then_text_uses_existing_pipeline_once(app):
+    async def scenario():
+        cid = await completed_quiz_without_text(app, MemoryStorageDouble().context())
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        await app.functions["continue_coaching"](callback(201, "continue_coaching"), state)
+        await app.functions["coaching"](incoming(202, "Продолжаю."), state)
+        assert app.generated.await_count == 1
+        assert await database.get_recent_history(41, cid) == [
+            {"role": "user", "content": "Продолжаю."},
+            {"role": "assistant", "content": "Ответ."},
+        ]
+        assert await database.get_coaching_resume_conversation_id(41) == cid
+    run(scenario())
+
+
+def test_start_home_continue_then_voice_uses_existing_pipeline_once(app):
+    async def scenario():
+        cid = await completed_quiz_without_text(app, MemoryStorageDouble().context())
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        await app.functions["continue_coaching"](callback(201, "continue_coaching"), state)
+        await app.functions["handle_voice_note"](incoming(202, voice=True), state)
+        assert app.bot.get_file.await_count == 1
+        assert app.bot.download_file.await_count == 1
+        assert app.transcribe.await_count == 1
+        assert app.generated.await_count == 1
+        assert await database.get_recent_history(41, cid) == [
+            {"role": "user", "content": "Распознанный текст."},
+            {"role": "assistant", "content": "Ответ."},
+        ]
+    run(scenario())
+
+
+def test_home_buttons_reject_old_wrong_and_duplicate_messages(app):
+    async def scenario():
+        cid = await completed_quiz_without_text(app, MemoryStorageDouble().context())
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        await app.functions["cmd_start"](incoming(300, "/start"), state)
+        for message_id in (201, 399):
+            bad = callback(message_id, "continue_coaching")
+            await app.functions["continue_coaching"](bad, state)
+            assert bad.answer.await_args.kwargs["show_alert"] is True
+            assert await state.get_state() == app.states.HOME.state
+        good = callback(301, "continue_coaching")
+        await app.functions["continue_coaching"](good, state)
+        assert await state.get_state() == app.states.AI_CHAT.state
+        again = callback(301, "continue_coaching")
+        await app.functions["continue_coaching"](again, state)
+        assert again.answer.await_args.kwargs["show_alert"] is True
+        assert await database.get_coaching_resume_conversation_id(41) == cid
+        with sqlite3.connect(app.db_path) as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM active_chat_sessions WHERE user_id=41"
+            ).fetchone()[0] == 1
+        app.generated.assert_not_awaited()
+    run(scenario())
+
+
+def test_home_private_boundary_and_missing_session_fail_closed(app):
+    async def scenario():
+        await database.mark_coaching_eligible(41)
+        state = MemoryStorageDouble().context()
+        group = incoming(200, "/start", chat_type="group")
+        await app.functions["cmd_start"](group, state)
+        assert await state.get_state() is None
+        group.answer.assert_not_awaited()
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        assert await state.get_state() == app.states.HOME.state
+        group_button = callback(201, "continue_coaching")
+        group_button.message.chat.type = "group"
+        group_button.message.chat.id = 900
+        await app.functions["continue_coaching"](group_button, state)
+        assert await state.get_state() == app.states.HOME.state
+        with sqlite3.connect(app.db_path) as conn:
+            conn.execute("DELETE FROM active_chat_sessions WHERE user_id=41")
+        missing = callback(201, "continue_coaching")
+        await app.functions["continue_coaching"](missing, state)
+        assert missing.answer.await_args.kwargs["show_alert"] is True
+        assert await state.get_state() == app.states.HOME.state
+        assert await database.is_coaching_eligible(41) is True
+        assert await database.get_coaching_resume_conversation_id(41) is None
+        app.generated.assert_not_awaited()
+    run(scenario())
+
+
+def test_start_after_new_keeps_new_id_cutoff_and_no_old_history(app):
+    async def scenario():
+        state = MemoryStorageDouble().context()
+        old_cid = await complete_normal_path(app, state)
+        await app.functions["cmd_new"](incoming(200, "/new"), state)
+        before = durable_start_snapshot(app.db_path)
+        assert before["session"][0] != old_cid
+        assert before["history"] == []
+        await app.functions["cmd_start"](incoming(201, "/start"), state)
+        assert await state.get_state() == app.states.HOME.state
+        assert durable_start_snapshot(app.db_path) == before
+        await app.functions["continue_coaching"](callback(202, "continue_coaching"), state)
+        assert (await state.get_data())["shadow_conversation_id"] == before["session"][0]
+        assert durable_start_snapshot(app.db_path) == before
+    run(scenario())
+
+
+@pytest.mark.parametrize("result,verified", [(None, 0), ("Полутень", 0), ("", 1)])
+def test_start_continue_never_invents_quiz_context(app, monkeypatch, result, verified):
+    async def scenario():
+        cid = await database.mark_coaching_eligible(41)
+        with sqlite3.connect(app.db_path) as conn:
+            conn.execute(
+                "UPDATE users SET test_result=?, quiz_result_verified=? WHERE user_id=41",
+                (result, verified),
+            )
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        await app.functions["continue_coaching"](callback(201, "continue_coaching"), state)
+        assert await database.get_coaching_quiz_result(41) is None
+        observed = []
+        original = app.chat_module.build_system_instruction
+        monkeypatch.setattr(
+            app.chat_module, "build_system_instruction",
+            lambda **kw: (observed.append(kw["archetype"]), original(**kw))[1],
+        )
+        await app.functions["coaching"](incoming(202, "Без тестового контекста."), state)
+        assert observed == [None]
+        assert await database.get_coaching_resume_conversation_id(41) == cid
+        assert app.generated.await_count == 1
+    run(scenario())
+
+
+def test_start_home_voice_message_recovers_without_button(app):
+    async def scenario():
+        cid = await completed_quiz_without_text(app, MemoryStorageDouble().context())
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_start"](incoming(200, "/start"), state)
+        assert await state.get_state() == app.states.HOME.state
+        await app.functions["handle_voice_note"](incoming(202, voice=True), state)
+        assert await state.get_state() == app.states.AI_CHAT.state
+        assert app.bot.get_file.await_count == 1
+        assert app.transcribe.await_count == 1
+        assert app.generated.await_count == 1
+        assert await database.get_recent_history(41, cid) == [
+            {"role": "user", "content": "Распознанный текст."},
+            {"role": "assistant", "content": "Ответ."},
+        ]
+        stale = callback(201, "continue_coaching")
+        await app.functions["continue_coaching"](stale, state)
+        assert stale.answer.await_args.kwargs["show_alert"] is True
     run(scenario())

@@ -1,6 +1,14 @@
 # `/start` product semantics decision (DEV)
 
-Status: product decision support, 12 October 2026. No runtime or copy change is made here. Recommendation: **C — `/start` is a contextual home**. This is a product design inference, not a rule personally attributed to Olga.
+Status: decision recorded 12 October 2026; the contextual-home slice is now implemented in DEV. Recommendation **C — `/start` is a contextual home** was a product design inference, not a rule personally attributed to Olga.
+
+## IMPLEMENTED STATUS — contextual home
+
+The private `/start` handler now checks only the explicit durable `users.coaching_eligible` marker before changing volatile FSM. An absent/false marker keeps the existing welcome/photo and `start_quiz` entry. An interrupted non-eligible quiz is cleared and begins again at question 1; no previous answers are claimed or restored. An eligible user instead sees a short returning home with one `Продолжить разговор` button. No `/new` or quiz-retake button was added. The historical current-behavior table below describes the pre-change baseline.
+
+Home uses the volatile `Quiz.HOME` state and the exact `home_message_id` of the current bot message. The private `continue_coaching` callback requires that state/message pair and rechecks the existing durable eligibility-plus-current-session lookup. It consumes the button, sets `AI_CHAT` and the current shadow conversation ID, then sends only an entry confirmation. It does not call a model, admit a user message, rotate/create a session, or alter history. Old, wrong-message, duplicate, and non-private callbacks fail closed. If an eligible user has no active session—an inconsistency with the guarded coaching-entry write—the home is shown, but Continue fails closed; it does not invent a conversation. That case needs operational repair rather than heuristic recovery.
+
+Opening home performs no durable write: eligibility, verified/missing quiz result, active ID/cutoff, chat history, and pending drafts remain unchanged. Text or voice sent from the current home before pressing Continue can still use the shared private durable-recovery helper and process that same message through the normal path. `/new` retains its independent explicit conversation-rotation/deletion semantics. A quiz retake remains a separate, unimplemented product action, and interrupted quiz progress remains volatile.
 
 ## Evidence and authority
 

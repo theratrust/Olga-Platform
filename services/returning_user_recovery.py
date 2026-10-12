@@ -23,17 +23,24 @@ async def ensure_coaching_state(
     current_state = await state.get_state()
     if current_state == state_cls.AI_CHAT.state:
         return True
+    home_state = getattr(getattr(state_cls, "HOME", None), "state", None)
+    data = await state.get_data()
+    at_current_home = (
+        home_state is not None
+        and current_state == home_state
+        and type(data.get("home_message_id")) is int
+        and data["home_message_id"] > 0
+    )
     if (
-        current_state is not None
-        or await state.get_data()
-        or get_coaching_resume_conversation_id is None
+        get_coaching_resume_conversation_id is None
+        or (not at_current_home and (current_state is not None or data))
     ):
         return False
     conversation_id = await get_coaching_resume_conversation_id(message.from_user.id)
     if conversation_id is None:
         return False
     await state.set_state(state_cls.AI_CHAT)
-    await state.update_data(shadow_conversation_id=conversation_id)
+    await state.update_data(home_message_id=None, shadow_conversation_id=conversation_id)
     logging.info(
         "returning_user_state_restored source=durable_eligibility mode=%s conversation_id=%s",
         mode,
