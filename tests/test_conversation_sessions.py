@@ -352,12 +352,16 @@ def test_exact_legacy_upgrade_preserves_rows_and_is_idempotent(monkeypatch, tmp_
     first_schema, first_columns, first_rows = _schema_and_legacy_data(path)
     assert before_rows == first_rows
     assert {name for name in before_columns if before_columns[name] != first_columns[name]} == {
-        "chat_messages", "pending_drafts"
+        "users", "chat_messages", "pending_drafts"
     }
+    assert first_columns["users"] == before_columns["users"] + (("coaching_eligible", "INTEGER"),)
     for name in ("chat_messages", "pending_drafts"):
         assert first_columns[name] == before_columns[name] + (("conversation_id", "TEXT"),)
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM active_chat_sessions").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT coaching_eligible FROM users ORDER BY user_id"
+        ).fetchall() == [(0,), (0,)]
         assert {row[0] for row in conn.execute("SELECT conversation_id FROM chat_messages")} == {None}
         assert {row[0] for row in conn.execute("SELECT conversation_id FROM pending_drafts")} == {None}
         assert [r[2] for r in conn.execute("PRAGMA index_info(idx_chat_messages_session_id)")] == [

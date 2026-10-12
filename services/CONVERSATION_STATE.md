@@ -10,6 +10,12 @@ On first chat use, a new active ID is created. /new rotates that ID and deletes 
 
 The schema upgrade is additive and repeat-safe: nullable conversation_id columns, nullable cutoff_chat_id/cutoff_message_id columns on active_chat_sessions, and a composite chat-history index. Legacy NULL rows are never assigned to a new session or read into its history. /new deletes them. No running database migration is performed by writing this code; init_db upgrades the configured DB only when that runtime is next started.
 
+## Durable returning-text admission
+
+`users.coaching_eligible` is a user-level resume marker, default false. `init_db` adds the field to older schemas without promoting legacy rows. The normal completed quiz-to-chat callback is the sole writer; it also ensures an active session ID. It is independent of `users.test_result`, which is not yet written by the quiz path.
+
+A private text message arriving with absent, empty FSM reads this marker and the current active session together. On success, the handler restores only `AI_CHAT` and the shadow ID, then uses the existing atomic admission and downstream direct/moderated route for that same message. The eligibility read creates no chat row or conversation ID. `/new` retains eligibility and rotates the active ID/cutoff as before. Voice recovery, quiz-context restoration, stale callback behavior, and `/start` product semantics are separate work.
+
 ## Private-chat admission boundary
 
 End-user coaching is private-chat only. /new, coaching text/voice, /start, quiz callbacks, and the AI-chat entry callback ignore non-private chats without changing coaching FSM, history, or drafts. Admin/moderation control paths retain their existing behavior. Private inbound turns use their original Telegram chat ID and positive message ID; transcribed text never supplies a synthetic marker.

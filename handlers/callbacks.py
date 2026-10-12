@@ -8,6 +8,7 @@ def register_callbacks(
     dp: Dispatcher,
     bot,
     state_cls,
+    mark_coaching_eligible=None,
 ):
 
     @dp.callback_query(F.data == "menu_learn_more")
@@ -80,8 +81,23 @@ def register_callbacks(
         if current_state == state_cls.AI_CHAT.state:
             return
 
+        # Only the completed quiz route may issue durable resume eligibility.
+        # A stale/open callback can retain its existing volatile behavior, but
+        # must not become proof of completed onboarding.
+        data = await state.get_data()
+        questions = data.get("quiz_questions")
+        answers = data.get("answers_list")
+        verified_entry = (
+            current_state == getattr(getattr(state_cls, "CALC", None), "state", None)
+            and isinstance(questions, list) and bool(questions)
+            and isinstance(answers, list) and len(answers) == len(questions)
+            and data.get("current_q_idx") == len(questions)
+            and data.get("archetype") in {"Свет", "Полутень", "Тень"}
+        )
         await callback.message.answer(
             "Напиши своё сообщение ниже — AI-ассистент ответит, следуя методу Ольги 👇"
         )
-
+        if verified_entry and mark_coaching_eligible is not None:
+            conversation_id = await mark_coaching_eligible(callback.from_user.id)
+            await state.update_data(shadow_conversation_id=conversation_id)
         await state.set_state(state_cls.AI_CHAT)

@@ -34,6 +34,7 @@ def register_chat(
     quality_shadow_observer=None,
     get_conversation_history_with_ids=None,
     admit_user_message=None,
+    get_coaching_resume_conversation_id=None,
 ):
     if admit_user_message is None:
         raise ValueError("Atomic user admission is required")
@@ -83,7 +84,26 @@ def register_chat(
         async with admission_lock(user_id):
             current_state = await state.get_state()
             if current_state != state_cls.AI_CHAT.state:
-                return
+                # Only a fresh, empty FSM may be restored. /start and an
+                # onboarding-in-progress state keep their existing behavior.
+                # Voice is intentionally outside this text-only recovery slice.
+                if (
+                    current_state is not None
+                    or await state.get_data()
+                    or getattr(message, "voice", None) is not None
+                    or getattr(message, "audio", None) is not None
+                    or get_coaching_resume_conversation_id is None
+                ):
+                    return
+                resume_id = await get_coaching_resume_conversation_id(user_id)
+                if resume_id is None:
+                    return
+                await state.set_state(state_cls.AI_CHAT)
+                await state.update_data(shadow_conversation_id=resume_id)
+                logging.info(
+                    "returning_user_state_restored source=durable_eligibility conversation_id=%s",
+                    resume_id,
+                )
             conversation_id, rejection = await admit_user_message(
                 user_id, full_name, username, user_text, *marker,
             )

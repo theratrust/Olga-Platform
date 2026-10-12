@@ -14,7 +14,7 @@ from database import (
     get_conversation_history_with_ids,
     create_pending_draft, get_pending_draft, update_draft_status,
     rotate_conversation, get_or_create_conversation_id, is_active_conversation,
-    admit_user_message,
+    admit_user_message, mark_coaching_eligible, get_coaching_resume_conversation_id,
     is_pending_draft_active, save_approved_draft_message,
 )
 
@@ -107,6 +107,7 @@ register_callbacks(
     dp,
     bot,
     Quiz,
+    mark_coaching_eligible=mark_coaching_eligible,
 )
 
 register_quiz(
@@ -180,6 +181,7 @@ ai_chat_handler = register_chat(
     quality_shadow_observer=quality_shadow_dispatcher.submit,
     get_conversation_history_with_ids=get_conversation_history_with_ids,
     admit_user_message=admit_user_message,
+    get_coaching_resume_conversation_id=get_coaching_resume_conversation_id,
 )
 
 register_voice(

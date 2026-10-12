@@ -16,6 +16,7 @@ async def init_db():
                 subscription_status TEXT DEFAULT 'PENDING',
                 test_result TEXT,
                 answers TEXT,
+                coaching_eligible INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -67,7 +68,15 @@ async def init_db():
             )
         """)
 
-        # Additive, repeat-safe DEV upgrade. NULL legacy rows remain unattributed.
+        # Additive, repeat-safe DEV upgrade. Legacy users remain ineligible.
+        async with db.execute("PRAGMA table_info(users)") as cursor:
+            user_columns = {row[1] for row in await cursor.fetchall()}
+        if "coaching_eligible" not in user_columns:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN coaching_eligible INTEGER NOT NULL DEFAULT 0"
+            )
+
+        # NULL legacy conversation rows remain unattributed.
         for table in ("chat_messages", "pending_drafts"):
             async with db.execute(f"PRAGMA table_info({table})") as cursor:
                 columns = {row[1] for row in await cursor.fetchall()}
@@ -141,6 +150,52 @@ async def get_user_profile(user_id: int):
             WHERE user_id = ?
         """, (user_id,)) as cursor:
             return await cursor.fetchone()
+
+
+async def mark_coaching_eligible(user_id: int):
+    """Record verified coaching entry and ensure an active ID, atomically.
+
+    Only the guarded quiz-to-chat entry path may call this helper. It does not
+    promote a user from chat history, quiz fields, or an existing session.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute(
+                "INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,)
+            )
+            await db.execute(
+                "UPDATE users SET coaching_eligible = 1 WHERE user_id = ?",
+                (user_id,),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO active_chat_sessions (user_id, conversation_id) "
+                "VALUES (?, ?)",
+                (user_id, uuid4().hex),
+            )
+            async with db.execute(
+                "SELECT conversation_id FROM active_chat_sessions WHERE user_id = ?",
+                (user_id,),
+            ) as cursor:
+                conversation_id = (await cursor.fetchone())[0]
+            await db.commit()
+            return conversation_id
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def get_coaching_resume_conversation_id(user_id: int):
+    """Read-only eligibility proof plus current session; never create an ID."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT s.conversation_id
+            FROM users AS u
+            JOIN active_chat_sessions AS s ON s.user_id = u.user_id
+            WHERE u.user_id = ? AND u.coaching_eligible = 1
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+    return row[0] if row else None
 
 
 async def get_subscription_stats():
