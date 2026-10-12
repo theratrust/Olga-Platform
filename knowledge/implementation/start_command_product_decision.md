@@ -1,0 +1,71 @@
+# `/start` product semantics decision (DEV)
+
+Status: product decision support, 12 October 2026. No runtime or copy change is made here. Recommendation: **C — `/start` is a contextual home**. This is a product design inference, not a rule personally attributed to Olga.
+
+## Evidence and authority
+
+Inspected the current `handlers/start.py`, `handlers/quiz.py`, `handlers/callbacks.py`, `handlers/chat.py`, `services/returning_user_recovery.py`, and `database.py`, together with `dev_product_readiness_audit.md`, `returning_user_resume_design.md`, and `источник_истины_метода_Ольги.md`. The older audit and historical design sections predate durable eligibility, verified quiz results, and callback freshness; the implemented-status sections and current code govern this analysis. The method source has no independently verifiable direct Olga statement about bot commands, home screens, or quiz retakes. Its user-authorship and non-diagnostic quiz boundaries support preserving user agency, but do not dictate the `/start` UI.
+
+The current private `/start` handler unconditionally clears the entire FSM, saves only `user_first_name` and the new welcome-photo message ID, and displays the same onboarding caption with one `Пройти экспресс-тест (2 мин)` button (`start_quiz`). It does not read or write SQLite. The caption invites an adaptation quiz and assumes a relocation motivated by love/being near a loved one; it provides no returning-user path. Quiz callbacks are bound to the current FSM state and message ID, so previously issued quiz/result/entry buttons become stale after `/start`. A new valid quiz can later replace the verified stored result, but `/start` itself cannot.
+
+Durable authority is separate: `users.coaching_eligible` is set at the guarded `open_ai_chat` transition; `users.test_result` is useful for coaching only with `quiz_result_verified=1` and a valid enum; `active_chat_sessions` owns the current conversation ID/cutoff. The text/voice recovery helper restores only a **fresh, empty** FSM. After `/start`, the FSM has welcome data, so ordinary coaching text is not recovered; voice is stopped before download/transcription. A durable eligible user is therefore presented with an onboarding screen while her old active conversation still exists.
+
+## Current behavior by starting state
+
+In the table, “DB unchanged” means `/start` itself makes no durable mutation. “Old history remains” refers to history still present immediately before `/start`; `/new` may already have deleted it. All listed UI behavior assumes a valid private chat. Non-private `/start` returns without clearing state or sending UI.
+
+| Before `/start` | FSM effect | Durable DB, conversation ID, quiz result, eligibility | Visible UI and old coaching history |
+| --- | --- | --- | --- |
+| 1. Completely new user | Clears empty/unknown FSM; stores first name and new welcome ID; state remains unset. | DB unchanged; no new user/session row or conversation ID; no result or eligibility is created. | Welcome photo/caption and quiz button. No prior history. |
+| 2. User mid-quiz | Discards in-memory question index, answers, score, expected message IDs, and quiz state; stores new welcome data. Old buttons fail freshness checks. | DB unchanged; any earlier durable result/eligibility/session stays as it was. Current incomplete attempt was never persisted. | Same welcome and quiz button; the current quiz must start over. Any earlier coaching history remains if it existed. |
+| 3. Quiz completed, coaching entry not clicked | Clears `CALC`, archetype and current entry-button ID. | Verified quiz result already persisted by `show_result`; `coaching_eligible` remains false; no coaching conversation is created by `/start`. | Same welcome; old entry button is stale. A later full retake can replace the result. No coaching history from this new path. |
+| 4. Active coaching user | Clears `AI_CHAT`, cached conversation ID and other FSM data; stores welcome data. Recovery refuses this nonempty onboarding FSM. | Eligibility, active ID/cutoff, verified result and existing chat history remain. | Onboarding welcome; ordinary coaching text no longer enters coaching until a valid entry path. This is a contradictory screen/state pair. |
+| 5. Active user after process restart/fresh FSM | Clears the fresh FSM and stores welcome data; does not use durable resume proof. | Same durable eligibility, active ID/cutoff, result and history remain. | Same onboarding UI and blocked ordinary text/voice despite otherwise working fresh-FSM recovery. |
+| 6. Eligible user, active session, verified result | Same as 4. | Current ID/cutoff, eligibility and verified result remain; `/start` does not change archetype. | Quiz-only welcome while old conversation/history persists. A subsequent legitimate retake may replace result. |
+| 7. Eligible user, missing or unverified result | Same as 4. | Eligibility and active ID/cutoff persist; missing/unverified result remains unusable. No archetype is inferred. | Quiz-only welcome; old history remains. A later legitimate completion can establish a verified result. |
+| 8. User after `/new` | Clears the `AI_CHAT` that `/new` set; stores welcome data. | The **new** active ID/cutoff persists; eligibility and verified result persist; pre-`/new` chat history has already been removed. | Quiz-only welcome. `/start` does not revive deleted history or restore the old ID, but blocks easy continuation of the new conversation. |
+
+The mid-quiz row also applies to an eligible user voluntarily retaking the quiz: their durable eligibility and any older verified result survive the interruption, although volatile retake progress is lost. Current `/start` never erases the old coaching conversation; the misleading “start again” appearance is a UI/state mismatch, not a durable reset.
+
+## User mental model and distinct commands
+
+Telegram users commonly send `/start` to open or reopen a bot and find its entry point. That convention does not express informed consent to retake a quiz, discard progress, replace a result, or erase a coaching conversation. The current command does not actually erase durable work, but it hides the path back to it. A first-time user needs an obvious onboarding action; a returning user needs an obvious way to continue without a forced quiz.
+
+`/new` already has a different, explicit job: in a private chat it rotates the active conversation ID and cutoff, deletes the user's chat-message history and PENDING drafts, keeps `coaching_eligible` and the verified quiz result, sets `AI_CHAT`, and invites a new topic. It can currently set volatile `AI_CHAT` even for an unmarked user; that existing behavior is not authority for `/start` eligibility. A recommended `/start` home should **inspect and navigate**; `/new` remains the explicit new-conversation action. If a home button offers “new conversation,” it should invoke the same semantics only after a separate deliberate click, not on opening home. Neither command should be described as a quiz retake.
+
+## Options against product principles
+
+| Option | Low surprise; preserve work; explicit destructive action | Return, first-time experience, quiz repeatability | Safety and `/new` distinction |
+| --- | --- | --- | --- |
+| **A. Always restart onboarding** | Poor for an eligible user: reopening looks like a mandatory repeat while history and eligibility still exist. If “restart” were meant to erase them, explicit confirmation and exact deletion rules would be needed. A valid retake may replace a verified result later. | New-user flow stays clear; returning path becomes needlessly long; quiz retake is conflated with reopening. | Simple current UI but contradictory durable state. `/start` risks becoming a misleading second reset next to `/new`. Not recommended. |
+| **B. Resume existing users** | Good preservation if `/start` merely presents welcome-back and a continue action without rotation/deletion. | Easy return and clear new-user onboarding; quiz retake would need another discoverable action. | Small transition surface. If it offers only “continue,” `/start` is less useful as a general home. Viable narrower fallback. |
+| **C. Contextual home** | Best explicitness: `/start` itself changes no durable work; user separately chooses to continue, invoke `/new`, or start a quiz retake if supported. | New users see onboarding; eligible users see a short path back plus distinct optional actions. Can expose quiz retake without making it automatic. | More UI/callback wiring than B, but clean command separation and guarded actions. Recommended, with a small initial menu. |
+| **D. Auto-resume coaching** | Preserves durable data, but a silent switch to `AI_CHAT` may be invisible when the user expected an entry screen or help. | Fastest return, weaker orientation; retake/home need separate navigation. | Technically compact but `/start` behaves like a hidden state toggle. Less clear than B or C. |
+
+A short copy sketch for the viable navigation patterns (not approved copy):
+
+- New user, all options: “Добро пожаловать. Начнём с короткого теста?” Button: “Пройти тест”.
+- B, eligible: “С возвращением. Продолжим разговор?” Button: “Продолжить разговор”.
+- C, eligible: “С возвращением. Что ты хочешь сделать?” Buttons initially: “Продолжить разговор”, “Новый разговор”; add “Пройти тест заново” only when the repeat policy is approved.
+- D, eligible: “С возвращением. Можешь продолжать разговор.” This notification would be important because auto-entry otherwise gives little feedback.
+
+These sketches deliberately do not promise recovery of an interrupted quiz. The actual new-user caption also warrants separate review for its assumed relocation/partner story, but copy changes are outside this decision.
+
+## Quiz retake, interrupted attempts, and legacy rows
+
+A user may reasonably want to retake the quiz, but reopening the bot is weak evidence of that intent. Recommend a dedicated “Пройти тест заново” action on the eligible home or an equivalent explicit menu action, if the product owner decides retakes are supported. Starting a retake should not erase the currently verified result; only a successfully completed, valid quiz should replace it. A partially completed or abandoned retake leaves the prior verified result intact. Whether and how to explain changed results is a later product/copy question. No scoring change follows from this recommendation.
+
+Quiz progress is FSM-only. A non-eligible user's quiz interrupted by process restart cannot be resumed from SQLite. Under C, `/start` should show first-time/onboarding entry and let the user begin the quiz from question 1; it must not claim to recover answers. If the FSM still contains a live quiz, a later implementation should avoid silently discarding progress on a mere “home” request: continue that active quiz or offer an explicit restart. This is a narrow navigation decision, not a proposal to persist quiz progress. Current behavior unconditionally abandons the live attempt.
+
+For legacy users with `coaching_eligible=0`, historical chat rows, sessions, or an unverified result do not authorize the returning-user home. Classify them with the non-eligible/onboarding route unless independently verified by an existing legitimate transition. False negatives are safer than inferring completion from history. A verified result without coaching eligibility (completed quiz before entry) also does not grant a coaching-resume button; the future UI may need a distinct “continue to coaching” route, guarded by the completed-quiz proof, rather than forcing a retake. That intermediate screen is an implementation design detail requiring a narrow test, not permission to infer eligibility from the result alone.
+
+## Decision and later implementation slice
+
+**Choose C — `/start` is a contextual home.** For a new/non-eligible user, show onboarding and quiz entry. For an eligible returning user, show a short welcome-back home with an explicit continue action for the **current** coaching conversation. Do not enter coaching merely by displaying home. The continue action should use the existing durable eligibility/current-session authority, preserve the ID/cutoff and verified optional quiz context, and enter the ordinary coaching path. An interrupted, non-eligible quiz user after FSM loss starts quiz again from the beginning. An explicit quiz-retake action, if approved, owns retake semantics; `/new` remains the explicit way to start a new coaching conversation.
+
+Opening `/start` must not silently delete chat history or pending drafts, rotate the active conversation ID, reset the cutoff, clear `coaching_eligible`, erase or rewrite `test_result`/`quiz_result_verified`, or promote a legacy row. Those user-level fields and session fields remain untouched until the user selects a separately named action with its own existing authorization. The current `/new` effects remain unchanged. An explicit destructive reset, if ever offered, needs its own deliberate user action and precise confirmation/copy; sending `/start` alone is not that action.
+
+Smallest later slice: branch the private `/start` presentation on the durable eligibility marker without writing DB state; keep the existing non-eligible onboarding screen; give eligible users a compact continue button guarded by the current active conversation and private-chat rules. Test active and fresh-FSM eligible users, missing quiz context, legacy rows, `/new` ID preservation, old-button freshness, and first message after continue. Do not combine this with interrupted-quiz persistence, retake implementation, or coaching-prompt work. A later optional menu addition can expose `/new` and an approved retake action.
+
+**Olga input:** the inspected method sources do not settle bot command semantics. Olga need not supply a new method rule to establish the safe default that `/start` preserves work and offers a way back. Product-owner/Olga review is appropriate before approving final Russian copy and whether/how quiz retakes appear, but that input need not block the recommended narrow resume-home slice. This note is a recommendation for approval, not an implemented or already-approved UX policy.
+EOF'
