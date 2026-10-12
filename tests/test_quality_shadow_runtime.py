@@ -478,7 +478,8 @@ def conversation_chat_ports(monkeypatch, direct, method_observer, quality_observ
         types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")), lambda u: "Тест", lambda u: "Тест",
         add, recent, pending, clear, get_id, AsyncMock(return_value=True), direct_chat=direct,
         shadow_observer=method_observer, quality_shadow_observer=quality_observer,
-        admit_user_message=admit)
+        admit_user_message=admit,
+        is_coaching_eligible=AsyncMock(return_value=True))
     def message(text=USER):
         return types.SimpleNamespace(from_user=types.SimpleNamespace(id=987654321, username=None), text=text,
                                      chat=types.SimpleNamespace(id=987654321, type="private"), message_id=next(_message_counter), answer=AsyncMock())

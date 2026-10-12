@@ -440,6 +440,7 @@ def test_handler_new_and_user_isolation_without_persisted_state(monkeypatch):
         lambda user: "Тест", lambda user: "Тест", add, recent, AsyncMock(), rotate,
         get_id, is_active, direct_chat=True, get_conversation_history_with_ids=full,
         admit_user_message=admit,
+        is_coaching_eligible=AsyncMock(return_value=True),
     )
     state = types.SimpleNamespace(
         get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}),
@@ -511,6 +512,7 @@ def _real_pipeline(monkeypatch, tmp_path):
         database.is_active_conversation, direct_chat=True,
         get_conversation_history_with_ids=database.get_conversation_history_with_ids,
         admit_user_message=database.admit_user_message,
+        is_coaching_eligible=database.is_coaching_eligible,
     )
     state = types.SimpleNamespace(
         get_state=AsyncMock(return_value="chat"), get_data=AsyncMock(return_value={}),
@@ -535,6 +537,7 @@ def _real_pipeline(monkeypatch, tmp_path):
             await database.add_chat_message(user_id, "Тест", "без username", role, content, cid)
 
     async def reset(user_id):
+        await database.mark_coaching_eligible(user_id)
         await commands["cmd_new"](message(user_id, "/new"), state)
 
     return types.SimpleNamespace(database=database, ask=ask, seed=seed, reset=reset, calls=calls,

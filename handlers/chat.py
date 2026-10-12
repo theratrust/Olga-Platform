@@ -37,6 +37,7 @@ def register_chat(
     admit_user_message=None,
     get_coaching_resume_conversation_id=None,
     get_coaching_quiz_result=None,
+    is_coaching_eligible=None,
 ):
     if admit_user_message is None:
         raise ValueError("Atomic user admission is required")
@@ -52,14 +53,49 @@ def register_chat(
             logging.info("ADMISSION_REJECTED_INCOMPARABLE operation=new")
             return
         user_id = message.from_user.id
+        denial = None
         async with admission_lock(user_id):
-            conversation_id = await rotate_conversation(user_id, *marker)
-            if conversation_id is None:
-                logging.info("ADMISSION_REJECTED_STALE operation=new")
-                return
-            await state.set_state(state_cls.AI_CHAT)
-            await state.update_data(shadow_conversation_id=conversation_id)
+            # A session, history, quiz result, or volatile AI_CHAT is not admission.
+            # Check the explicit durable marker before rotation or any reset effect.
+            try:
+                eligible = (
+                    await is_coaching_eligible(user_id)
+                    if is_coaching_eligible is not None else False
+                )
+            except Exception as exc:
+                logging.error(
+                    "new_conversation_rejected reason=eligibility_lookup_error kind=%s",
+                    type(exc).__name__,
+                )
+                denial = "lookup_error"
+            else:
+                if not eligible:
+                    logging.info("new_conversation_rejected reason=ineligible")
+                    denial = "ineligible"
 
+            if denial is not None:
+                # A stale AI_CHAT cache cannot remain as coaching authority.
+                # Preserve an in-progress quiz or other onboarding FSM.
+                if await state.get_state() == state_cls.AI_CHAT.state:
+                    await state.clear()
+            else:
+                conversation_id = await rotate_conversation(user_id, *marker)
+                if conversation_id is None:
+                    logging.info("ADMISSION_REJECTED_STALE operation=new")
+                    return
+                await state.set_state(state_cls.AI_CHAT)
+                await state.update_data(shadow_conversation_id=conversation_id)
+
+        if denial == "ineligible":
+            await message.answer(
+                "Сначала пройди короткий тест, чтобы начать разговор. Отправь /start."
+            )
+            return
+        if denial == "lookup_error":
+            await message.answer(
+                "Не удалось проверить доступ к разговору. Попробуй ещё раз позже."
+            )
+            return
         await message.answer(
             "Начинаем новый разговор. Предыдущая история очищена.\n\n"
             "Напиши, что сейчас для тебя важно."

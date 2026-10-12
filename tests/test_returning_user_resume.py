@@ -190,6 +190,7 @@ def app(monkeypatch, tmp_path):
         admit_user_message=database.admit_user_message,
         get_coaching_resume_conversation_id=database.get_coaching_resume_conversation_id,
         get_coaching_quiz_result=database.get_coaching_quiz_result,
+        is_coaching_eligible=database.is_coaching_eligible,
     )
     transcribe = AsyncMock(return_value="Распознанный текст.")
     loaded["voice"].register_voice(
@@ -553,14 +554,20 @@ def test_schema_upgrade_keeps_legacy_users_ineligible(tmp_path, monkeypatch):
 def test_new_does_not_grant_unmarked_user_resume(app):
     async def scenario():
         state = MemoryStorageDouble().context(user_id=49)
-        await app.functions["cmd_new"](incoming(101, "/new", user_id=49), state)
-        assert await state.get_state() == app.states.AI_CHAT.state
+        command = incoming(101, "/new", user_id=49)
+        await app.functions["cmd_new"](command, state)
+        assert await state.get_state() is None
+        assert command.answer.await_count == 1
         assert await database.get_coaching_resume_conversation_id(49) is None
+        await app.functions["coaching"](incoming(102, "После /new.", user_id=49), state)
         restarted = MemoryStorageDouble().context(user_id=49)
-        await app.functions["coaching"](incoming(102, "После /new.", user_id=49), restarted)
+        await app.functions["coaching"](incoming(103, "После рестарта.", user_id=49), restarted)
         assert app.generated.await_count == 0
         assert await restarted.get_state() is None
         with sqlite3.connect(app.db_path) as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM active_chat_sessions WHERE user_id=49"
+            ).fetchone()[0] == 0
             assert conn.execute(
                 "SELECT COUNT(*) FROM chat_messages WHERE user_id=49"
             ).fetchone()[0] == 0
@@ -1644,4 +1651,201 @@ def test_start_home_voice_message_recovers_without_button(app):
         stale = callback(201, "continue_coaching")
         await app.functions["continue_coaching"](stale, state)
         assert stale.answer.await_args.kwargs["show_alert"] is True
+    run(scenario())
+
+# /new is a conversation reset for an already eligible user, never admission.
+def new_command_snapshot(db_path, user_id=41):
+    with sqlite3.connect(db_path) as conn:
+        return tuple(
+            tuple(conn.execute(f"SELECT * FROM {table} WHERE user_id=? ORDER BY rowid", (user_id,)))
+            for table in ("users", "active_chat_sessions", "chat_messages", "pending_drafts")
+        )
+
+
+@pytest.mark.parametrize("fresh_fsm", [False, True])
+def test_eligible_new_preserves_profile_and_rotates_existing_scope(app, fresh_fsm):
+    async def scenario():
+        state = MemoryStorageDouble().context()
+        old_id = await complete_normal_path(app, state)
+        if fresh_fsm:
+            state = MemoryStorageDouble().context()
+        with sqlite3.connect(app.db_path) as conn:
+            conn.execute(
+                "INSERT INTO pending_drafts (user_id, status, conversation_id) "
+                "VALUES (41, 'PENDING', ?)", (old_id,)
+            )
+            conn.execute(
+                "INSERT INTO pending_drafts (user_id, status, conversation_id) "
+                "VALUES (41, 'APPROVED', ?)", (old_id,)
+            )
+            profile_before = conn.execute(
+                "SELECT coaching_eligible, test_result, quiz_result_verified "
+                "FROM users WHERE user_id=41"
+            ).fetchone()
+        command = incoming(200, "/new")
+        model_calls = app.generated.await_count
+        await app.functions["cmd_new"](command, state)
+        assert command.answer.await_count == 1
+        assert await state.get_state() == app.states.AI_CHAT.state
+        new_id = await database.get_coaching_resume_conversation_id(41)
+        assert new_id != old_id
+        assert (await state.get_data())["shadow_conversation_id"] == new_id
+        assert app.generated.await_count == model_calls
+        with sqlite3.connect(app.db_path) as conn:
+            assert conn.execute(
+                "SELECT coaching_eligible, test_result, quiz_result_verified "
+                "FROM users WHERE user_id=41"
+            ).fetchone() == profile_before == (1, "Тень", 1)
+            assert conn.execute(
+                "SELECT cutoff_chat_id, cutoff_message_id FROM active_chat_sessions "
+                "WHERE user_id=41"
+            ).fetchone() == (41, 200)
+            assert conn.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE user_id=41"
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT status FROM pending_drafts WHERE user_id=41"
+            ).fetchall() == [("APPROVED",)]
+        restarted = MemoryStorageDouble().context()
+        await app.functions["coaching"](incoming(201, "Новый разговор."), restarted)
+        assert await database.get_coaching_resume_conversation_id(41) == new_id
+        assert await database.get_recent_history(41, new_id) == [
+            {"role": "user", "content": "Новый разговор."},
+            {"role": "assistant", "content": "Ответ."},
+        ]
+    run(scenario())
+
+
+def test_eligible_fresh_fsm_new_can_create_first_active_session(app):
+    async def scenario():
+        await database.mark_coaching_eligible(41)
+        with sqlite3.connect(app.db_path) as conn:
+            conn.execute("DELETE FROM active_chat_sessions WHERE user_id=41")
+        state = MemoryStorageDouble().context()
+        await app.functions["cmd_new"](incoming(200, "/new"), state)
+        assert await state.get_state() == app.states.AI_CHAT.state
+        assert (await state.get_data())["shadow_conversation_id"]
+        with sqlite3.connect(app.db_path) as conn:
+            assert conn.execute(
+                "SELECT cutoff_chat_id, cutoff_message_id FROM active_chat_sessions "
+                "WHERE user_id=41"
+            ).fetchone() == (41, 200)
+            assert conn.execute(
+                "SELECT coaching_eligible FROM users WHERE user_id=41"
+            ).fetchone() == (1,)
+        app.generated.assert_not_awaited()
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    ["new", "user", "session", "history", "unverified", "verified", "legacy"],
+)
+def test_ineligible_new_preserves_all_durable_rows_and_denies_coaching(app, evidence):
+    async def scenario():
+        with sqlite3.connect(app.db_path) as conn:
+            if evidence != "new":
+                conn.execute("INSERT INTO users (user_id) VALUES (41)")
+            if evidence in {"session", "legacy"}:
+                conn.execute(
+                    "INSERT INTO active_chat_sessions "
+                    "(user_id, conversation_id, cutoff_chat_id, cutoff_message_id) "
+                    "VALUES (41, 'legacy-id', 41, 50)"
+                )
+            if evidence in {"history", "legacy"}:
+                conn.execute(
+                    "INSERT INTO chat_messages (user_id, role, content, conversation_id) "
+                    "VALUES (41, 'user', 'legacy', 'legacy-id')"
+                )
+                conn.execute(
+                    "INSERT INTO pending_drafts (user_id, status, conversation_id) "
+                    "VALUES (41, 'PENDING', 'legacy-id')"
+                )
+            if evidence in {"unverified", "verified", "legacy"}:
+                conn.execute(
+                    "UPDATE users SET test_result='Полутень', quiz_result_verified=? "
+                    "WHERE user_id=41", (int(evidence == "verified"),)
+                )
+        before = new_command_snapshot(app.db_path)
+        state = MemoryStorageDouble().context()
+        command = incoming(200, "/new")
+        await app.functions["cmd_new"](command, state)
+        assert await state.get_state() is None
+        assert command.answer.await_count == 1
+        assert "/start" in command.answer.await_args.args[0]
+        assert new_command_snapshot(app.db_path) == before
+        await app.functions["coaching"](incoming(201, "Недопустимый вход."), state)
+        assert new_command_snapshot(app.db_path) == before
+        app.generated.assert_not_awaited()
+        app.bot.get_file.assert_not_awaited()
+    run(scenario())
+
+
+def test_ineligible_new_clears_only_stale_ai_chat_fsm(app):
+    async def scenario():
+        state = MemoryStorageDouble().context()
+        await state.set_state(app.states.AI_CHAT)
+        await state.update_data(shadow_conversation_id="stale")
+        await app.functions["cmd_new"](incoming(200, "/new"), state)
+        assert await state.get_state() is None
+        assert await state.get_data() == {}
+        await app.functions["coaching"](incoming(201, "Не должно пройти."), state)
+        await app.functions["handle_voice_note"](incoming(202, voice=True), state)
+        app.generated.assert_not_awaited()
+        app.bot.get_file.assert_not_awaited()
+        app.transcribe.assert_not_awaited()
+        assert new_command_snapshot(app.db_path) == ((), (), (), ())
+    run(scenario())
+
+
+def test_ineligible_new_preserves_quiz_fsm_and_private_boundary(app):
+    async def scenario():
+        state = MemoryStorageDouble().context()
+        await state.set_state(app.states.QUESTION_STEP)
+        await state.update_data(current_q_idx=1, answers_list=[{"q": 1}])
+        before_state = await state.get_data()
+        group = incoming(200, "/new", chat_type="group")
+        await app.functions["cmd_new"](group, state)
+        group.answer.assert_not_awaited()
+        assert await state.get_state() == app.states.QUESTION_STEP.state
+        assert await state.get_data() == before_state
+        await app.functions["cmd_new"](incoming(201, "/new"), state)
+        assert await state.get_state() == app.states.QUESTION_STEP.state
+        assert await state.get_data() == before_state
+        assert new_command_snapshot(app.db_path) == ((), (), (), ())
+        app.generated.assert_not_awaited()
+    run(scenario())
+
+
+def test_new_eligibility_lookup_failure_fails_closed(app):
+    async def failing_lookup(_user_id):
+        raise RuntimeError("offline fixture failure")
+
+    functions = {}
+    dp = types.SimpleNamespace(message=Registrar(functions))
+    app.chat_module.register_chat(
+        dp, app.bot, object(), "offline", [], app.states,
+        lambda user: user.first_name, lambda user: user.first_name,
+        database.add_chat_message, database.get_recent_history,
+        database.create_pending_draft, database.rotate_conversation,
+        database.get_or_create_conversation_id, database.is_active_conversation,
+        direct_chat=True, admit_user_message=database.admit_user_message,
+        is_coaching_eligible=failing_lookup,
+    )
+
+    async def scenario():
+        old_id = await database.mark_coaching_eligible(41)
+        await database.add_chat_message(
+            41, "Тест", "", "user", "Existing history", old_id,
+        )
+        state = MemoryStorageDouble().context()
+        await state.set_state(app.states.AI_CHAT)
+        before = new_command_snapshot(app.db_path)
+        command = incoming(200, "/new")
+        await functions["cmd_new"](command, state)
+        assert await state.get_state() is None
+        assert new_command_snapshot(app.db_path) == before
+        assert command.answer.await_count == 1
+        assert "Попробуй ещё раз" in command.answer.await_args.args[0]
+        app.generated.assert_not_awaited()
     run(scenario())

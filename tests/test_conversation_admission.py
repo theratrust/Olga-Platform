@@ -157,6 +157,10 @@ def _load_handlers(monkeypatch):
 
 @pytest.fixture
 def pipeline(monkeypatch, db):
+    # These session-order tests operate on an already admitted coaching user.
+    # The marker alone does not create a session or history.
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO users (user_id, coaching_eligible) VALUES (41, 1)")
     modules = _load_handlers(monkeypatch)
     handlers = {}
     class Registrar:
@@ -180,6 +184,7 @@ def pipeline(monkeypatch, db):
         database.is_active_conversation, direct_chat=True,
         get_conversation_history_with_ids=database.get_conversation_history_with_ids,
         admit_user_message=database.admit_user_message,
+        is_coaching_eligible=database.is_coaching_eligible,
     )
     transcribe = AsyncMock(return_value="Распознанный вопрос.")
     modules["voice"].register_voice(
@@ -281,6 +286,7 @@ def test_moderated_stale_inbound_never_creates_draft(pipeline, monkeypatch):
         database.get_recent_history, drafts, database.rotate_conversation,
         database.get_or_create_conversation_id, database.is_active_conversation,
         direct_chat=False, admit_user_message=database.admit_user_message,
+        is_coaching_eligible=database.is_coaching_eligible,
     )
     async def scenario():
         await p.handlers["cmd_new"](message(message_id=102, text="/new"), p.state)

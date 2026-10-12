@@ -189,6 +189,7 @@ ai_chat_handler = register_chat(
     admit_user_message=admit_user_message,
     get_coaching_resume_conversation_id=get_coaching_resume_conversation_id,
     get_coaching_quiz_result=get_coaching_quiz_result,
+    is_coaching_eligible=is_coaching_eligible,
 )
 
 register_voice(
