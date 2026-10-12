@@ -354,7 +354,9 @@ def test_exact_legacy_upgrade_preserves_rows_and_is_idempotent(monkeypatch, tmp_
     assert {name for name in before_columns if before_columns[name] != first_columns[name]} == {
         "users", "chat_messages", "pending_drafts"
     }
-    assert first_columns["users"] == before_columns["users"] + (("coaching_eligible", "INTEGER"),)
+    assert first_columns["users"] == before_columns["users"] + (
+        ("coaching_eligible", "INTEGER"), ("quiz_result_verified", "INTEGER")
+    )
     for name in ("chat_messages", "pending_drafts"):
         assert first_columns[name] == before_columns[name] + (("conversation_id", "TEXT"),)
     with sqlite3.connect(path) as conn:

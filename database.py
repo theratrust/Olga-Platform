@@ -15,6 +15,7 @@ async def init_db():
                 username TEXT,
                 subscription_status TEXT DEFAULT 'PENDING',
                 test_result TEXT,
+                quiz_result_verified INTEGER NOT NULL DEFAULT 0,
                 answers TEXT,
                 coaching_eligible INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -75,6 +76,10 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE users ADD COLUMN coaching_eligible INTEGER NOT NULL DEFAULT 0"
             )
+        if "quiz_result_verified" not in user_columns:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN quiz_result_verified INTEGER NOT NULL DEFAULT 0"
+            )
 
         # NULL legacy conversation rows remain unattributed.
         for table in ("chat_messages", "pending_drafts"):
@@ -123,10 +128,49 @@ async def update_user_test_result(user_id: int, answers: str, test_result: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             UPDATE users
-            SET answers = ?, test_result = ?
+            SET answers = ?, test_result = ?, quiz_result_verified = 0
             WHERE user_id = ?
         """, (answers, test_result, user_id))
         await db.commit()
+
+
+VALID_QUIZ_RESULTS = frozenset({"Свет", "Полутень", "Тень"})
+
+
+async def persist_completed_quiz_result(user_id: int, result: str):
+    """Upsert only a result validated by the completed quiz handler.
+
+    The verification bit distinguishes this write path from legacy test_result
+    values of unknown provenance. It does not grant coaching eligibility.
+    """
+    if not isinstance(result, str) or result not in VALID_QUIZ_RESULTS:
+        raise ValueError("Invalid completed quiz result")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO users (user_id, test_result, quiz_result_verified)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+                test_result = excluded.test_result,
+                quiz_result_verified = 1
+            WHERE users.quiz_result_verified != 1
+               OR users.test_result IS NOT excluded.test_result
+        """, (user_id, result))
+        await db.commit()
+
+
+async def get_coaching_quiz_result(user_id: int):
+    """Return only a verified enum for an eligible coaching user."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT test_result
+            FROM users
+            WHERE user_id = ?
+              AND coaching_eligible = 1
+              AND quiz_result_verified = 1
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+    result = row[0] if row else None
+    return result if result in VALID_QUIZ_RESULTS else None
 
 
 async def update_subscription_status(user_id: int, status: str):

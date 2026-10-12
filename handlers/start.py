@@ -46,9 +46,10 @@ def register_start(
             ]
         )
 
-        await message.answer_photo(
+        welcome = await message.answer_photo(
             photo=get_image_file("q1_welcome.jpg"),
             caption=caption,
             reply_markup=kb,
             parse_mode="HTML",
         )
+        await state.update_data(welcome_message_id=welcome.message_id)

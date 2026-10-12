@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import Dispatcher, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,10 +13,29 @@ def register_callbacks(
     mark_coaching_eligible=None,
 ):
 
+    async def reject(callback, reason):
+        logging.info("quiz_callback_rejected reason=%s", reason)
+        await callback.answer("Эта кнопка больше не активна.", show_alert=True)
+
+    def matches_entry_message(data, message):
+        expected_id = data.get("quiz_entry_message_id")
+        return (
+            type(expected_id) is int
+            and expected_id > 0
+            and expected_id == message.message_id
+        )
+
     @dp.callback_query(F.data == "menu_learn_more")
-    async def menu_learn_more_handler(callback: types.CallbackQuery):
+    async def menu_learn_more_handler(callback: types.CallbackQuery, state: FSMContext):
         if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
             await callback.answer()
+            return
+        if await state.get_state() != state_cls.CALC.state:
+            await reject(callback, "wrong_state")
+            return
+        data = await state.get_data()
+        if not matches_entry_message(data, callback.message):
+            await reject(callback, "stale_message")
             return
         await callback.answer()
         chat_id = callback.message.chat.id
@@ -62,42 +83,47 @@ def register_callbacks(
             ]
         )
 
-        await bot.send_message(
+        sent = await bot.send_message(
             chat_id=chat_id,
             text=learn_more_text,
             reply_markup=kb_learn,
             parse_mode="HTML",
         )
+        await state.update_data(quiz_entry_message_id=sent.message_id)
 
     @dp.callback_query(F.data == "open_ai_chat")
     async def enter_chat(callback: types.CallbackQuery, state: FSMContext):
         if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
             await callback.answer()
             return
-        await callback.answer()
-
         current_state = await state.get_state()
-
-        if current_state == state_cls.AI_CHAT.state:
+        if current_state != state_cls.CALC.state:
+            await reject(callback, "wrong_state")
             return
 
-        # Only the completed quiz route may issue durable resume eligibility.
-        # A stale/open callback can retain its existing volatile behavior, but
-        # must not become proof of completed onboarding.
         data = await state.get_data()
+        if not matches_entry_message(data, callback.message):
+            await reject(callback, "stale_message")
+            return
         questions = data.get("quiz_questions")
         answers = data.get("answers_list")
         verified_entry = (
-            current_state == getattr(getattr(state_cls, "CALC", None), "state", None)
-            and isinstance(questions, list) and bool(questions)
+            isinstance(questions, list) and bool(questions)
             and isinstance(answers, list) and len(answers) == len(questions)
             and data.get("current_q_idx") == len(questions)
             and data.get("archetype") in {"Свет", "Полутень", "Тень"}
+            and data.get("result_processing_message_id") is None
         )
+        if not verified_entry:
+            await reject(callback, "invalid_value")
+            return
+
+        await callback.answer()
+        if mark_coaching_eligible is not None:
+            conversation_id = await mark_coaching_eligible(callback.from_user.id)
+            await state.update_data(shadow_conversation_id=conversation_id)
+        await state.update_data(quiz_entry_message_id=None)
+        await state.set_state(state_cls.AI_CHAT)
         await callback.message.answer(
             "Напиши своё сообщение ниже — AI-ассистент ответит, следуя методу Ольги 👇"
         )
-        if verified_entry and mark_coaching_eligible is not None:
-            conversation_id = await mark_coaching_eligible(callback.from_user.id)
-            await state.update_data(shadow_conversation_id=conversation_id)
-        await state.set_state(state_cls.AI_CHAT)

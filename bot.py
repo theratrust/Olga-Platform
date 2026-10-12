@@ -15,6 +15,7 @@ from database import (
     create_pending_draft, get_pending_draft, update_draft_status,
     rotate_conversation, get_or_create_conversation_id, is_active_conversation,
     admit_user_message, mark_coaching_eligible, get_coaching_resume_conversation_id,
+    persist_completed_quiz_result, get_coaching_quiz_result,
     is_pending_draft_active, save_approved_draft_message,
 )
 
@@ -117,6 +118,7 @@ register_quiz(
     default_questions=DEFAULT_QUESTIONS,
     get_user_first_name=get_user_first_name,
     get_image_file=get_image_file,
+    persist_completed_quiz_result=persist_completed_quiz_result,
 )
 
 register_admin(
@@ -182,6 +184,7 @@ ai_chat_handler = register_chat(
     get_conversation_history_with_ids=get_conversation_history_with_ids,
     admit_user_message=admit_user_message,
     get_coaching_resume_conversation_id=get_coaching_resume_conversation_id,
+    get_coaching_quiz_result=get_coaching_quiz_result,
 )
 
 register_voice(
@@ -195,6 +198,8 @@ register_voice(
     file_bytes,
 ),
     ai_chat_handler=ai_chat_handler,
+    state_cls=Quiz,
+    get_coaching_resume_conversation_id=get_coaching_resume_conversation_id,
 )
 
 async def main():

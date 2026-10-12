@@ -6,7 +6,8 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.fsm.context import FSMContext
 
 from utils.telegram import send_long_message
-from services.conversation_admission import private_message_marker
+from services.conversation_admission import admission_lock, private_message_marker
+from services.returning_user_recovery import ensure_coaching_state
 
 def register_voice(
     dp: Dispatcher,
@@ -16,6 +17,8 @@ def register_voice(
     admin_ids: list[int],
     transcribe_audio_file,
     ai_chat_handler,
+    state_cls,
+    get_coaching_resume_conversation_id,
 ):
 
     @dp.message(F.voice | F.audio)
@@ -24,9 +27,21 @@ def register_voice(
         state: FSMContext,
     ):
         user_id = message.from_user.id
-        if user_id not in admin_ids and private_message_marker(message) is None:
-            logging.info("ADMISSION_REJECTED_INCOMPARABLE operation=voice")
-            return
+        if user_id not in admin_ids:
+            if private_message_marker(message) is None:
+                logging.info("ADMISSION_REJECTED_INCOMPARABLE operation=voice")
+                return
+            # Restore before Telegram file lookup/download or transcription.
+            # Admin voice keeps its existing independent control path.
+            async with admission_lock(user_id):
+                if not await ensure_coaching_state(
+                    message,
+                    state,
+                    state_cls,
+                    get_coaching_resume_conversation_id,
+                    mode="voice",
+                ):
+                    return
 
         voice_obj = message.voice or message.audio
         file_info = await bot.get_file(voice_obj.file_id)

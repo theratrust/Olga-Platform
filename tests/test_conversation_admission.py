@@ -182,7 +182,11 @@ def pipeline(monkeypatch, db):
         admit_user_message=database.admit_user_message,
     )
     transcribe = AsyncMock(return_value="Распознанный вопрос.")
-    modules["voice"].register_voice(dp, bot, object(), "offline", [], transcribe, coach)
+    modules["voice"].register_voice(
+        dp, bot, object(), "offline", [], transcribe, coach,
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
+        database.get_coaching_resume_conversation_id,
+    )
     modules["callbacks"].register_callbacks(dp, bot, types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")))
     return types.SimpleNamespace(db=db, modules=modules, handlers=handlers, bot=bot, dp=dp,
                                  generated=generated, transcribe=transcribe, state=state, coach=coach)
@@ -384,7 +388,7 @@ def test_nonprivate_onboarding_and_quiz_do_not_mutate_fsm(monkeypatch):
         await handlers["cmd_start"](group, state)
         for name in ("start_quiz", "process_answer", "show_result", "menu_learn_more_handler", "enter_chat"):
             if name == "menu_learn_more_handler":
-                await handlers[name](callback)
+                await handlers[name](callback, state)
             else:
                 await handlers[name](callback, state)
         assert state.clear.await_count == state.update_data.await_count == state.set_state.await_count == 0
@@ -475,8 +479,12 @@ def test_admin_voice_in_group_keeps_existing_control_path(pipeline, monkeypatch)
     admin_client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
     send_long = AsyncMock()
     monkeypatch.setattr(p.modules["voice"], "send_long_message", send_long)
-    p.modules["voice"].register_voice(p.dp, p.bot, admin_client, "offline", [41],
-                                     AsyncMock(return_value="Admin request"), p.coach)
+    p.modules["voice"].register_voice(
+        p.dp, p.bot, admin_client, "offline", [41],
+        AsyncMock(return_value="Admin request"), p.coach,
+        types.SimpleNamespace(AI_CHAT=types.SimpleNamespace(state="chat")),
+        database.get_coaching_resume_conversation_id,
+    )
     async def scenario():
         await p.handlers["handle_voice_note"](message(chat_type="group", chat_id=900, voice=True), p.state)
         assert create.await_count == 1

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from aiogram import Dispatcher, Bot, types, F
 from aiogram.fsm.context import FSMContext
@@ -16,7 +17,19 @@ def register_quiz(
     default_questions,
     get_user_first_name,
     get_image_file,
+    persist_completed_quiz_result=None,
 ):
+
+    async def reject(callback, reason):
+        logging.info("quiz_callback_rejected reason=%s", reason)
+        await callback.answer("Эта кнопка больше не активна.", show_alert=True)
+
+    def matches_message(expected_id, message):
+        return (
+            type(expected_id) is int
+            and expected_id > 0
+            and expected_id == message.message_id
+        )
 
     async def render_question_step(
         message_obj: types.Message,
@@ -108,6 +121,13 @@ def register_quiz(
         if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
             await callback.answer()
             return
+        data = await state.get_data()
+        if await state.get_state() is not None:
+            await reject(callback, "wrong_state")
+            return
+        if not matches_message(data.get("welcome_message_id"), callback.message):
+            await reject(callback, "stale_message")
+            return
         await callback.answer()
 
         try:
@@ -118,6 +138,11 @@ def register_quiz(
         name = get_user_first_name(callback.from_user)
 
         await state.update_data(
+            welcome_message_id=None,
+            last_question_message_id=None,
+            result_processing_message_id=None,
+            quiz_entry_message_id=None,
+            archetype=None,
             quiz_questions=default_questions,
             current_q_idx=0,
             total_score=0,
@@ -139,73 +164,76 @@ def register_quiz(
         if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
             await callback.answer()
             return
+        if await state.get_state() != state_cls.QUESTION_STEP.state:
+            await reject(callback, "wrong_state")
+            return
+        data = await state.get_data()
+        if not matches_message(data.get("last_question_message_id"), callback.message):
+            await reject(callback, "stale_message")
+            return
+        questions = data.get("quiz_questions")
+        idx = data.get("current_q_idx")
+        answers = data.get("answers_list")
+        current_score = data.get("total_score")
+        if (
+            not isinstance(questions, list)
+            or questions != default_questions
+            or type(idx) is not int
+            or not 0 <= idx < len(questions)
+            or not isinstance(answers, list)
+            or len(answers) != idx
+            or type(current_score) is not int
+        ):
+            await reject(callback, "wrong_state")
+            return
+        parts = callback.data.split("_")
+        if len(parts) != 3 or parts[:2] != ["q", "ans"] or not parts[2].isdigit():
+            await reject(callback, "invalid_value")
+            return
+        option_index = int(parts[2])
+        options = questions[idx]["options"]
+        if not 0 <= option_index < len(options):
+            await reject(callback, "invalid_value")
+            return
         await callback.answer()
 
         try:
-            await bot.send_chat_action(
-                callback.message.chat.id,
-                "typing",
-            )
+            await bot.send_chat_action(callback.message.chat.id, "typing")
         except Exception:
             pass
-
         await asyncio.sleep(2)
 
-        option_index = int(callback.data.split("_")[2])
-
-        data = await state.get_data()
-
-        questions = data.get(
-            "quiz_questions",
-            default_questions,
-        )
-
-        idx = data.get("current_q_idx", 0)
-
-        current_score = data.get(
-            "total_score",
-            0,
-        )
-
-        if idx >= len(questions):
-            await callback.answer(
-                "Этот вопрос уже завершён. Начни тест заново через /start.",
-                show_alert=True,
-            )
+        # /start or another accepted answer may have changed the volatile step
+        # while the acknowledgement delay was in progress.
+        fresh = await state.get_data()
+        if (
+            await state.get_state() != state_cls.QUESTION_STEP.state
+            or fresh.get("last_question_message_id") != callback.message.message_id
+            or fresh.get("current_q_idx") != idx
+        ):
+            logging.info("quiz_callback_rejected reason=duplicate")
             return
 
-        if option_index < 0 or option_index >= len(questions[idx]["options"]):
-            await callback.answer(
-                "Этот вариант ответа больше недоступен. Начни тест заново через /start.",
-                show_alert=True,
-            )
-            return
-
-        option = questions[idx]["options"][option_index]
-
-        answers = data.get("answers_list", [])
-
-        answers.append(
-            {
-                "q": idx + 1,
-                "choice": option["text"],
-                "score": option["score"],
-            }
-        )
-
+        option = options[option_index]
+        updated_answers = list(answers)
+        updated_answers.append({
+            "q": idx + 1,
+            "choice": option["text"],
+            "score": option["score"],
+        })
         await state.update_data(
             total_score=current_score + option["score"],
             current_q_idx=idx + 1,
-            answers_list=answers,
+            answers_list=updated_answers,
+            last_question_message_id=None,
         )
-
         await render_question_step(
             callback.message,
             state,
             delete_previous=True,
         )
 
-    @dp.callback_query(state_cls.CALC, F.data == "show_result")
+    @dp.callback_query(F.data == "show_result")
     async def show_result(
         callback: types.CallbackQuery,
         state: FSMContext,
@@ -213,6 +241,51 @@ def register_quiz(
         if not is_private_coaching_chat(callback.message.chat, callback.from_user.id):
             await callback.answer()
             return
+        if await state.get_state() != state_cls.CALC.state:
+            await reject(callback, "wrong_state")
+            return
+        data = await state.get_data()
+        if not matches_message(data.get("last_question_message_id"), callback.message):
+            await reject(callback, "stale_message")
+            return
+        total = data.get("total_score", 0)
+        questions = data.get("quiz_questions")
+        answers = data.get("answers_list")
+        completed = (
+            isinstance(questions, list)
+            and questions == default_questions
+            and bool(questions)
+            and isinstance(answers, list)
+            and len(answers) == len(questions)
+            and data.get("current_q_idx") == len(questions)
+            and type(total) is int
+            and 0 <= total <= 6
+        )
+        if completed:
+            for index, (question, answer) in enumerate(zip(questions, answers), 1):
+                options = question.get("options") if isinstance(question, dict) else None
+                if (
+                    not isinstance(answer, dict)
+                    or answer.get("q") != index
+                    or not isinstance(options, list)
+                    or not any(
+                        answer.get("choice") == option.get("text")
+                        and type(answer.get("score")) is int
+                        and answer["score"] == option.get("score")
+                        for option in options
+                    )
+                ):
+                    completed = False
+                    break
+        if not completed or sum(answer["score"] for answer in answers) != total:
+            await reject(callback, "invalid_value")
+            return
+
+        # Consume the completion button before delayed UI work.
+        await state.update_data(
+            last_question_message_id=None,
+            result_processing_message_id=callback.message.message_id,
+        )
         await callback.answer()
 
         try:
@@ -221,18 +294,17 @@ def register_quiz(
             pass
 
         try:
-            await bot.send_chat_action(
-                callback.message.chat.id,
-                "upload_photo",
-            )
+            await bot.send_chat_action(callback.message.chat.id, "upload_photo")
         except Exception:
             pass
-
         await asyncio.sleep(5)
-
-        data = await state.get_data()
-
-        total = data.get("total_score", 0)
+        if (
+            await state.get_state() != state_cls.CALC.state
+            or (await state.get_data()).get("result_processing_message_id")
+            != callback.message.message_id
+        ):
+            logging.info("quiz_callback_rejected reason=wrong_state")
+            return
 
         name = get_user_first_name(
             callback.from_user
@@ -263,6 +335,10 @@ def register_quiz(
                 "внимание на себя."
             )
 
+        # Durable result precedes both the FSM cache and result/entry UI.
+        # A failed write cannot leave a newly shown result with no DB proof.
+        if persist_completed_quiz_result is not None:
+            await persist_completed_quiz_result(callback.from_user.id, archetype)
         await state.update_data(
             archetype=archetype
         )
@@ -297,7 +373,7 @@ def register_quiz(
             ]
         )
 
-        await bot.send_message(
+        entry_menu = await bot.send_message(
             callback.message.chat.id,
             (
                 "Если результат отозвался, "
@@ -306,4 +382,8 @@ def register_quiz(
             ),
             reply_markup=kb,
             parse_mode="HTML",
+        )
+        await state.update_data(
+            quiz_entry_message_id=entry_menu.message_id,
+            result_processing_message_id=None,
         )

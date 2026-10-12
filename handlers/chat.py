@@ -11,6 +11,7 @@ from services.coaching_generator import build_system_instruction, build_messages
 from services.coaching_generator import ExplicitTruncationError
 from services.conversation_state import build_carry_forward, render_runtime_memory
 from services.conversation_admission import admission_lock, private_message_marker
+from services.returning_user_recovery import ensure_coaching_state
 from utils.telegram import split_long_text
 
 
@@ -35,6 +36,7 @@ def register_chat(
     get_conversation_history_with_ids=None,
     admit_user_message=None,
     get_coaching_resume_conversation_id=None,
+    get_coaching_quiz_result=None,
 ):
     if admit_user_message is None:
         raise ValueError("Atomic user admission is required")
@@ -82,28 +84,14 @@ def register_chat(
         )
 
         async with admission_lock(user_id):
-            current_state = await state.get_state()
-            if current_state != state_cls.AI_CHAT.state:
-                # Only a fresh, empty FSM may be restored. /start and an
-                # onboarding-in-progress state keep their existing behavior.
-                # Voice is intentionally outside this text-only recovery slice.
-                if (
-                    current_state is not None
-                    or await state.get_data()
-                    or getattr(message, "voice", None) is not None
-                    or getattr(message, "audio", None) is not None
-                    or get_coaching_resume_conversation_id is None
-                ):
-                    return
-                resume_id = await get_coaching_resume_conversation_id(user_id)
-                if resume_id is None:
-                    return
-                await state.set_state(state_cls.AI_CHAT)
-                await state.update_data(shadow_conversation_id=resume_id)
-                logging.info(
-                    "returning_user_state_restored source=durable_eligibility conversation_id=%s",
-                    resume_id,
-                )
+            if not await ensure_coaching_state(
+                message,
+                state,
+                state_cls,
+                get_coaching_resume_conversation_id,
+                mode="text",
+            ):
+                return
             conversation_id, rejection = await admit_user_message(
                 user_id, full_name, username, user_text, *marker,
             )
@@ -115,7 +103,13 @@ def register_chat(
         await bot.send_chat_action(message.chat.id, "typing")
 
         data = await state.get_data()
-        archetype = data.get("archetype") or None
+        # A verified persisted result is authoritative in runtime wiring.
+        # Missing/invalid DB context never becomes a fallback archetype.
+        archetype = (
+            await get_coaching_quiz_result(user_id)
+            if get_coaching_quiz_result is not None
+            else data.get("archetype") or None
+        )
         # FSM is only an observer cache; DB identity governs persistence.
         if data.get("shadow_conversation_id") != conversation_id:
             await state.update_data(shadow_conversation_id=conversation_id)
